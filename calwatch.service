@@ -1,0 +1,31 @@
+[Unit]
+Description=CalWatch - CalDAV Directory Watcher Daemon
+Documentation=file:///home/cmd-keen/Projekte/Notes/Calendar/calwatch/design.md
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/local/bin/calwatch
+Restart=on-failure
+RestartSec=5
+
+# Ensure proper environment for notifications
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/%i
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/user/%i
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=calwatch
+
+[Install]
+WantedBy=default.target

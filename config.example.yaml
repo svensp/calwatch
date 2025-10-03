@@ -1,0 +1,39 @@
+# CalWatch Configuration Example
+# Copy this to ~/.config/calwatch/config.yaml and customize
+
+# Calendar directories to monitor
+directories:
+  # Personal calendar
+  - directory: ~/.calendars/personal
+    template: detailed.tpl
+    automatic_alerts:
+      - value: 15
+        unit: minutes
+      - value: 1
+        unit: hours
+
+  # Work calendar  
+  - directory: ~/.calendars/work
+    template: minimal.tpl
+    automatic_alerts:
+      - value: 5
+        unit: minutes
+      - value: 30
+        unit: minutes
+
+  # Family calendar
+  - directory: ~/.calendars/family
+    template: family.tpl
+    automatic_alerts:
+      - value: 10
+        unit: minutes
+
+# Notification settings
+notification:
+  backend: notify-send     # Currently only notify-send is supported
+  duration: 5000          # Notification display duration in milliseconds
+
+# Logging configuration
+logging:
+  level: info             # debug, info, warn, error
+  # file: ~/.local/share/calwatch/calwatch.log  # Optional: log to file instead of stderr
