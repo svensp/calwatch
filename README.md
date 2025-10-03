@@ -5,8 +5,8 @@ A lightweight CalDAV directory watcher daemon for Linux desktop environments. Ca
 ## Disclaimer
 
 I'm a programmer, just not for the go language. This daemon was built by providing claude with the use case and the
-architecture I'd build in the languages I'm fluent in, see [design.md](./design.md) then setting claude to work
-see [progress.md](./progress.md)
+architecture I'd build in the languages I'm fluent in, see [design.md](./docs/design.md) then setting claude to work
+see [progress.md](./docs/progress.md)
 
 I have not yet read over it to look for glaring logic errors, just verified that the basic functionality is there. Use
 at your own discretion.
@@ -256,7 +256,7 @@ CalWatch follows a clean, modular architecture:
 - **Alerts** - Minute-based alert scheduling logic
 - **Notifications** - Template rendering and desktop notification delivery
 
-See [design.md](design.md) for detailed architecture documentation.
+See [design.md](docs/design.md) for detailed architecture documentation.
 
 ## Waybar Integration
 
@@ -335,7 +335,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Issues**: Report bugs and feature requests on GitHub
 - **Discussions**: Use GitHub Discussions for questions and ideas
-- **Documentation**: Check the [design.md](design.md) for technical details
+- **Documentation**: Check the [design.md](docs/design.md) for technical details
 
 ---
 

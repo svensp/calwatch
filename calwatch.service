@@ -1,6 +1,6 @@
 [Unit]
 Description=CalWatch - CalDAV Directory Watcher Daemon
-Documentation=file:///home/cmd-keen/Projekte/Notes/Calendar/calwatch/design.md
+Documentation=file:///home/cmd-keen/Projekte/Notes/Calendar/calwatch/docs/design.md
 After=network.target
 
 [Service]

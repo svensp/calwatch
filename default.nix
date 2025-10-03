@@ -23,7 +23,8 @@ buildGoModule rec {
 
     # Install documentation
     mkdir -p $out/share/doc/calwatch
-    cp README.md design.md progress.md $out/share/doc/calwatch/
+    cp README.md $out/share/doc/calwatch/
+    cp -r docs $out/share/doc/calwatch/
   '';
 
   meta = with lib; {
