@@ -17,7 +17,7 @@ at your own discretion.
 - **Proper ICS parsing** with recurring event support via gocal
 - **Configurable alerts** with multiple time offsets (minutes, hours, days)
 - **Template-based notifications** with rich formatting options
-- **Desktop integration** via notify-send (compatible with dunst, mako, etc.)
+- **Desktop integration** via D-Bus notifications (no external dependencies)
 - **XDG compliant** configuration and template management
 - **Systemd integration** for background daemon operation
 - **No database dependency** - direct ICS file parsing
@@ -35,18 +35,72 @@ Perfect for users who:
 
 ### Prerequisites
 
-- Go 1.20+ (or use the provided `shell.nix` for NixOS)
-- `notify-send` (from libnotify)
+- Go 1.20+ (or use the provided `shell.nix` for NixOS) 
+- D-Bus session bus (standard on most Linux desktop environments)
 - A CalDAV sync solution like vdirsyncer
 
-### Build from Source
+### NixOS Installation (Recommended)
+
+#### Using Flakes
+
+```bash
+# Install directly from the repository
+nix profile install github:yourusername/calwatch
+
+# Or build locally
+git clone https://github.com/yourusername/calwatch.git
+cd calwatch
+nix build
+sudo cp result/bin/calwatch /usr/local/bin/
+```
+
+#### NixOS System Configuration
+
+Add to your `configuration.nix`:
+
+```nix
+{
+  services.calwatch = {
+    enable = true;
+    user = "yourusername";
+    settings = {
+      directories = [
+        {
+          directory = "/home/yourusername/.calendars/personal";
+          template = "detailed.tpl";
+          automatic_alerts = [
+            { value = 15; unit = "minutes"; }
+            { value = 1; unit = "hours"; }
+          ];
+        }
+      ];
+      notification = {
+        backend = "dbus";  # Default, no external dependencies
+        duration = 5000;
+      };
+      logging = {
+        level = "info";
+      };
+    };
+  };
+}
+```
+
+#### Development Environment
+
+```bash
+# Enter development shell with all dependencies
+nix develop
+
+# Or use legacy shell
+nix-shell
+```
+
+### Build from Source (Non-NixOS)
 
 ```bash
 git clone https://github.com/yourusername/calwatch.git
 cd calwatch
-
-# For NixOS users
-nix-shell
 
 # Build
 go build ./cmd/calwatch

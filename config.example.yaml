@@ -30,7 +30,7 @@ directories:
 
 # Notification settings
 notification:
-  backend: notify-send     # Currently only notify-send is supported
+  backend: dbus           # Options: dbus (default), notify-send
   duration: 5000          # Notification display duration in milliseconds
 
 # Logging configuration
