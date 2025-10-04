@@ -20,10 +20,12 @@ import (
 type CalWatch struct {
 	config             *config.Config
 	eventStorage       storage.EventStorage
+	stateManager       storage.StateManager
 	parser             parser.CalDAVParser
 	watcher            *watcher.CalDAVWatcher
 	alertManager       *alerts.AlertManager
 	notificationManager *notifications.NotificationManager
+	alertScheduler     alerts.AlertScheduler
 	
 	// Synchronization
 	stopChan   chan struct{}
@@ -51,6 +53,18 @@ func (cw *CalWatch) Initialize() error {
 
 	fmt.Fprintf(os.Stderr, "Loaded configuration with %d directories\n", len(cfg.Directories))
 
+	// Initialize state manager
+	stateManager, err := storage.NewXDGStateManager()
+	if err != nil {
+		return fmt.Errorf("failed to create state manager: %w", err)
+	}
+	cw.stateManager = stateManager
+
+	// Load existing state
+	if err := cw.stateManager.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to load state, starting fresh: %v\n", err)
+	}
+
 	// Initialize event storage
 	cw.eventStorage = storage.NewMemoryEventStorage()
 
@@ -64,6 +78,8 @@ func (cw *CalWatch) Initialize() error {
 	scheduler := alerts.NewMinuteBasedScheduler()
 	scheduler.SetEventStorage(cw.eventStorage)
 	scheduler.SetDirectoryConfigs(cfg.Directories)
+	scheduler.SetStateManager(cw.stateManager)
+	cw.alertScheduler = scheduler
 	cw.alertManager = alerts.NewAlertManager(scheduler)
 
 	// Initialize file watcher
@@ -96,6 +112,11 @@ func (cw *CalWatch) Start() error {
 		return fmt.Errorf("initial scan failed: %w", err)
 	}
 
+	// Check for wake-up and process missed events if enabled
+	if err := cw.handleWakeupDetection(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: wake-up detection failed: %v\n", err)
+	}
+
 	// Start alert manager
 	if err := cw.alertManager.Start(); err != nil {
 		return fmt.Errorf("failed to start alert manager: %w", err)
@@ -120,6 +141,13 @@ func (cw *CalWatch) Stop() error {
 	}
 
 	fmt.Fprintf(os.Stderr, "Stopping CalWatch daemon...\n")
+
+	// Save current state before stopping
+	if cw.stateManager != nil {
+		if err := cw.stateManager.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to save state: %v\n", err)
+		}
+	}
 
 	// Signal all goroutines to stop
 	close(cw.stopChan)
@@ -178,6 +206,56 @@ func (cw *CalWatch) performInitialScan() error {
 
 	fmt.Fprintf(os.Stderr, "Initial scan complete: loaded %d total events\n", totalEvents)
 
+	return nil
+}
+
+// handleWakeupDetection checks for system wake-up and processes missed events
+func (cw *CalWatch) handleWakeupDetection() error {
+	if !cw.config.WakeupHandling.Enable {
+		return nil
+	}
+
+	// Check if we've been asleep/shutdown
+	wasAsleep, sleepDuration := cw.alertScheduler.DetectWakeup()
+	if !wasAsleep {
+		fmt.Fprintf(os.Stderr, "No wake-up detected, continuing normal operation\n")
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Wake-up detected! System was inactive for %v\n", sleepDuration)
+
+	// Get the last tick time and current time
+	lastTick := cw.stateManager.GetLastAlertTick()
+	currentTime := time.Now()
+
+	fmt.Fprintf(os.Stderr, "Processing missed events from %v to %v\n", 
+		lastTick.Format("2006-01-02 15:04:05"), 
+		currentTime.Format("2006-01-02 15:04:05"))
+
+	// Process missed events
+	missedAlerts := cw.alertScheduler.CheckMissedAlerts(lastTick, currentTime, cw.config.WakeupHandling)
+
+	if len(missedAlerts) == 0 {
+		fmt.Fprintf(os.Stderr, "No missed events found\n")
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Found %d missed events, sending notifications...\n", len(missedAlerts))
+
+	// Send missed event notifications
+	for _, alertRequest := range missedAlerts {
+		fmt.Fprintf(os.Stderr, "Sending missed alert for event: %s (was due %s ago)\n", 
+			alertRequest.Event.GetSummary(), alertRequest.AlertOffset.String())
+
+		// For now, use regular notification method
+		// TODO: Extend NotificationManager to support context-aware notifications for missed events
+		if err := cw.notificationManager.SendNotification(alertRequest); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to send missed notification for event %s: %v\n", 
+				alertRequest.Event.GetSummary(), err)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "Missed event processing complete\n")
 	return nil
 }
 

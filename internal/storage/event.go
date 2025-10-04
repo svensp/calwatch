@@ -24,6 +24,7 @@ type Event interface {
 	GetEndTime() time.Time
 	GetTimezone() *time.Location
 	OccursOn(date time.Time) bool
+	OccurredWithin(start, end time.Time) []time.Time
 	NextOccurrence(after time.Time) *time.Time
 	ShouldAlert(now time.Time, alertOffset time.Duration) bool
 	GetAlertState(alertOffset time.Duration) AlertState
@@ -117,6 +118,30 @@ func (e *CalendarEvent) OccursOn(date time.Time) bool {
 	// TODO: Implement RRULE expansion logic
 	// For now, only handle single occurrence events
 	return false
+}
+
+// OccurredWithin returns all occurrences of the event within the given time range
+func (e *CalendarEvent) OccurredWithin(start, end time.Time) []time.Time {
+	var occurrences []time.Time
+	
+	// Ensure start and end are in the event's timezone for proper comparison
+	eventTz := e.GetTimezone()
+	startInTz := start.In(eventTz)
+	endInTz := end.In(eventTz)
+	eventStartInTz := e.StartTime.In(eventTz)
+	
+	// Check if the original occurrence falls within the range
+	if (eventStartInTz.After(startInTz) || eventStartInTz.Equal(startInTz)) &&
+		eventStartInTz.Before(endInTz) &&
+		!e.isExceptionDate(e.StartTime) {
+		occurrences = append(occurrences, e.StartTime)
+	}
+	
+	// TODO: Implement RRULE expansion logic for recurring events
+	// This would iterate through the recurrence rule and find all occurrences
+	// within the time range, respecting EXDATE exceptions
+	
+	return occurrences
 }
 
 // NextOccurrence returns the next occurrence of the event after the given time

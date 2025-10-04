@@ -149,3 +149,22 @@ All packages have comprehensive unit tests. When adding new functionality:
 - Read-only access to calendar directories
 - Template execution uses `text/template` to avoid XSS
 - Systemd sandboxing limits file system access
+
+## Documentation Standards
+
+### Improvement Documentation
+
+When working on improvements to CalWatch, document each improvement in `docs/improvement-XXX.md` where XXX is a zero-padded number (001, 002, etc.).
+
+**Improvement file structure**:
+- **Context**: Background and motivation for the improvement
+- **Conversation Summary**: Key points from the discussion
+- **Implementation**: What was changed and how
+- **Files Modified**: List of files affected
+- **Git Commit**: Commit hash and message
+- **Outcome**: Result and impact
+- **Next Steps**: Follow-up tasks or related improvements
+
+This pattern helps track the evolution of the project and provides context for future development decisions.
+
+**Important**: Every improvement implementation MUST include updating the README.md file to document the new functionality for users.

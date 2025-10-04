@@ -212,8 +212,15 @@ func TestFormatDuration(t *testing.T) {
 
 func TestNotificationManager_SendNotification(t *testing.T) {
 	config := config.NotificationConfig{
-		Backend:  "notify-send",
-		Duration: 5000,
+		Backend: "notify-send",
+		Duration: config.DurationConfig{
+			Type:  "timed",
+			Value: 5,
+			Unit:  "seconds",
+		},
+		DurationWhenLate: config.DurationConfig{
+			Type: "until_dismissed",
+		},
 	}
 
 	manager := NewNotificationManager(config)
@@ -264,13 +271,22 @@ func TestNotifySendNotifier_SetConfig(t *testing.T) {
 	notifier := NewNotifySendNotifier()
 	
 	newConfig := config.NotificationConfig{
-		Backend:  "notify-send",
-		Duration: 10000,
+		Backend: "notify-send",
+		Duration: config.DurationConfig{
+			Type:  "timed",
+			Value: 10,
+			Unit:  "seconds",
+		},
+		DurationWhenLate: config.DurationConfig{
+			Type: "until_dismissed",
+		},
 	}
 	
 	notifier.SetConfig(newConfig)
 	
-	if notifier.config.Duration != 10000 {
-		t.Errorf("Expected duration 10000, got %d", notifier.config.Duration)
+	expectedMs, _ := newConfig.Duration.ToMilliseconds()
+	actualMs, _ := notifier.config.Duration.ToMilliseconds()
+	if actualMs != expectedMs {
+		t.Errorf("Expected duration %d ms, got %d ms", expectedMs, actualMs)
 	}
 }

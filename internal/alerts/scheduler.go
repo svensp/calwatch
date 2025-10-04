@@ -19,23 +19,29 @@ type AlertRequest struct {
 // AlertScheduler manages alert timing and scheduling logic
 type AlertScheduler interface {
 	CheckAlerts() []AlertRequest
+	CheckMissedAlerts(lastTick, currentTime time.Time, wakeupConfig config.WakeupHandlingConfig) []AlertRequest
 	ScheduleNextCheck() time.Duration
 	SetEventStorage(storage storage.EventStorage)
 	SetDirectoryConfigs(configs []config.DirectoryConfig)
+	SetStateManager(stateManager storage.StateManager)
 	GetNextCheckTime() time.Time
+	DetectWakeup() (bool, time.Duration)
 }
 
 // MinuteBasedScheduler implements AlertScheduler with minute-level precision
 type MinuteBasedScheduler struct {
-	eventStorage     storage.EventStorage
-	directoryConfigs []config.DirectoryConfig
-	lastCheckTime    time.Time
+	eventStorage        storage.EventStorage
+	directoryConfigs    []config.DirectoryConfig
+	stateManager        storage.StateManager
+	priorityClassifier  *PriorityClassifier
+	lastCheckTime       time.Time
 }
 
 // NewMinuteBasedScheduler creates a new minute-based alert scheduler
 func NewMinuteBasedScheduler() *MinuteBasedScheduler {
 	return &MinuteBasedScheduler{
-		lastCheckTime: time.Now().Truncate(time.Minute),
+		priorityClassifier: NewPriorityClassifier(),
+		lastCheckTime:      time.Now().Truncate(time.Minute),
 	}
 }
 
@@ -47,6 +53,11 @@ func (s *MinuteBasedScheduler) SetEventStorage(storage storage.EventStorage) {
 // SetDirectoryConfigs sets the directory configurations for alert timing
 func (s *MinuteBasedScheduler) SetDirectoryConfigs(configs []config.DirectoryConfig) {
 	s.directoryConfigs = configs
+}
+
+// SetStateManager sets the state manager for persistent state tracking
+func (s *MinuteBasedScheduler) SetStateManager(stateManager storage.StateManager) {
+	s.stateManager = stateManager
 }
 
 // CheckAlerts checks for events that should trigger alerts right now
@@ -71,6 +82,12 @@ func (s *MinuteBasedScheduler) CheckAlerts() []AlertRequest {
 	}
 
 	s.lastCheckTime = now.Truncate(time.Minute)
+	
+	// Update last alert tick in state manager if available
+	if s.stateManager != nil {
+		s.stateManager.SetLastAlertTick(s.lastCheckTime)
+	}
+	
 	return alertRequests
 }
 
@@ -105,6 +122,148 @@ func (s *MinuteBasedScheduler) checkEventAlerts(event storage.Event, now time.Ti
 	return requests
 }
 
+// DetectWakeup detects if the system has been asleep/shutdown by comparing current time with last tick
+func (s *MinuteBasedScheduler) DetectWakeup() (bool, time.Duration) {
+	if s.stateManager == nil {
+		return false, 0
+	}
+	
+	now := time.Now()
+	lastTick := s.stateManager.GetLastAlertTick()
+	
+	// If we don't have a last tick, this might be first run
+	if lastTick.IsZero() {
+		return false, 0
+	}
+	
+	// Calculate time gap since last tick
+	gap := now.Sub(lastTick)
+	
+	// Consider it a wake-up if gap is more than 2 minutes
+	// (normal minute-based checking should have max 1 minute gap)
+	wakeupThreshold := 2 * time.Minute
+	
+	return gap > wakeupThreshold, gap
+}
+
+// CheckMissedAlerts processes missed events during sleep/shutdown periods
+func (s *MinuteBasedScheduler) CheckMissedAlerts(lastTick, currentTime time.Time, wakeupConfig config.WakeupHandlingConfig) []AlertRequest {
+	if s.eventStorage == nil || !wakeupConfig.Enable {
+		return nil
+	}
+	
+	// Skip if policy is to skip missed events
+	if wakeupConfig.MissedEventPolicy == "skip" {
+		return nil
+	}
+	
+	// Calculate missed period with limits
+	missedStart := lastTick
+	missedEnd := currentTime
+	
+	// Limit how far back we process (respect max_missed_days)
+	maxLookback := time.Duration(wakeupConfig.MaxMissedDays) * 24 * time.Hour
+	if missedEnd.Sub(missedStart) > maxLookback {
+		missedStart = missedEnd.Add(-maxLookback)
+	}
+	
+	// Get all events within the missed period
+	eventsInRange := s.eventStorage.GetEventsWithinRange(missedStart, missedEnd)
+	
+	var missedAlerts []AlertRequest
+	processStart := time.Now()
+	
+	// Process each event for missed alerts
+	for _, event := range eventsInRange {
+		// Check if we've exceeded our catchup time limit
+		if wakeupConfig.MaxCatchupTime.Type == "timed" {
+			if maxCatchupDuration, err := wakeupConfig.MaxCatchupTime.ToDuration(); err == nil {
+				if time.Since(processStart) > maxCatchupDuration {
+					break // Stop processing to avoid blocking the daemon
+				}
+			}
+		}
+		
+		// Get all occurrences of this event within the missed period
+		occurrences := event.OccurredWithin(missedStart, missedEnd)
+		
+		for _, occurrence := range occurrences {
+			alertRequests := s.checkMissedEventAlerts(event, occurrence, lastTick, wakeupConfig)
+			missedAlerts = append(missedAlerts, alertRequests...)
+		}
+	}
+	
+	// Apply policy-based filtering
+	return s.applyMissedEventPolicy(missedAlerts, wakeupConfig)
+}
+
+// checkMissedEventAlerts checks if alerts should have fired for a specific event occurrence
+func (s *MinuteBasedScheduler) checkMissedEventAlerts(event storage.Event, occurrence time.Time, lastTick time.Time, wakeupConfig config.WakeupHandlingConfig) []AlertRequest {
+	var requests []AlertRequest
+	
+	// For each directory config, check if any alerts should have fired
+	for _, dirConfig := range s.directoryConfigs {
+		for _, alertConfig := range dirConfig.AutomaticAlerts {
+			alertOffset, err := alertConfig.Duration()
+			if err != nil {
+				continue
+			}
+			
+			// Calculate when the alert should have fired
+			alertTime := occurrence.Add(-alertOffset)
+			
+			// Check if alert time was during the missed period
+			if alertTime.After(lastTick) && alertTime.Before(time.Now()) {
+				// This alert was missed, create a missed alert request
+				request := AlertRequest{
+					Event:       event,
+					AlertOffset: alertOffset,
+					Template:    dirConfig.Template,
+				}
+				requests = append(requests, request)
+			}
+		}
+	}
+	
+	return requests
+}
+
+// applyMissedEventPolicy applies the configured policy to filter missed alerts
+func (scheduler *MinuteBasedScheduler) applyMissedEventPolicy(alerts []AlertRequest, wakeupConfig config.WakeupHandlingConfig) []AlertRequest {
+	if len(alerts) == 0 {
+		return alerts
+	}
+	
+	switch wakeupConfig.MissedEventPolicy {
+	case "all":
+		return alerts
+		
+	case "summary":
+		if len(alerts) > wakeupConfig.SummaryThreshold {
+			// TODO: Create a summary alert instead of individual alerts
+			// For now, return first few alerts as a simplified approach
+			maxAlerts := wakeupConfig.SummaryThreshold
+			if len(alerts) > maxAlerts {
+				return alerts[:maxAlerts]
+			}
+		}
+		return alerts
+		
+	case "priority_only":
+		// Filter to only show high and critical priority events
+		if scheduler.priorityClassifier != nil {
+			return scheduler.priorityClassifier.FilterByPriority(alerts, PriorityHigh)
+		}
+		return alerts
+		
+	case "skip":
+		return nil
+		
+	default:
+		return alerts
+	}
+}
+
 // ScheduleNextCheck returns the duration until the next check should occur
 func (s *MinuteBasedScheduler) ScheduleNextCheck() time.Duration {
 	now := time.Now()
@@ -130,6 +289,21 @@ func NewAdvancedAlertScheduler() *AdvancedAlertScheduler {
 		MinuteBasedScheduler: NewMinuteBasedScheduler(),
 		alertHistory:         make(map[string]time.Time),
 	}
+}
+
+// CheckMissedAlerts delegates to the base scheduler
+func (s *AdvancedAlertScheduler) CheckMissedAlerts(lastTick, currentTime time.Time, wakeupConfig config.WakeupHandlingConfig) []AlertRequest {
+	return s.MinuteBasedScheduler.CheckMissedAlerts(lastTick, currentTime, wakeupConfig)
+}
+
+// DetectWakeup delegates to the base scheduler
+func (s *AdvancedAlertScheduler) DetectWakeup() (bool, time.Duration) {
+	return s.MinuteBasedScheduler.DetectWakeup()
+}
+
+// SetStateManager delegates to the base scheduler
+func (s *AdvancedAlertScheduler) SetStateManager(stateManager storage.StateManager) {
+	s.MinuteBasedScheduler.SetStateManager(stateManager)
 }
 
 // CheckAlerts checks for events with additional duplicate prevention

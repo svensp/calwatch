@@ -123,8 +123,15 @@ func TestConfig_Validate(t *testing.T) {
 					},
 				},
 				Notification: NotificationConfig{
-					Backend:  "notify-send",
-					Duration: 5000,
+					Backend: "notify-send",
+					Duration: DurationConfig{
+						Type:  "timed",
+						Value: 5,
+						Unit:  "seconds",
+					},
+					DurationWhenLate: DurationConfig{
+						Type: "until_dismissed",
+					},
 				},
 				Logging: LoggingConfig{
 					Level: "info",

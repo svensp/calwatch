@@ -32,9 +32,21 @@ type TemplateData struct {
 	UID         string
 }
 
+// NotificationContext provides context about the notification type
+type NotificationContext struct {
+	IsLate bool // Whether this is a missed/late notification
+}
+
+// NotificationRequest combines an alert request with notification context
+type NotificationRequest struct {
+	AlertRequest alerts.AlertRequest
+	Context      NotificationContext
+}
+
 // Notifier handles sending notifications
 type Notifier interface {
 	SendNotification(request alerts.AlertRequest) error
+	SendNotificationWithContext(request NotificationRequest) error
 	LoadTemplate(path string) (*template.Template, error)
 	ValidateTemplate(tmpl *template.Template, data TemplateData) error
 	SetConfig(config config.NotificationConfig)
@@ -52,8 +64,15 @@ func NewNotifySendNotifier() *NotifySendNotifier {
 	notifier := &NotifySendNotifier{
 		templates: make(map[string]*template.Template),
 		config: config.NotificationConfig{
-			Backend:  "notify-send",
-			Duration: 5000,
+			Backend: "notify-send",
+			Duration: config.DurationConfig{
+				Type:  "timed",
+				Value: 5,
+				Unit:  "seconds",
+			},
+			DurationWhenLate: config.DurationConfig{
+				Type: "until_dismissed",
+			},
 		},
 	}
 
@@ -68,16 +87,24 @@ func (n *NotifySendNotifier) SetConfig(config config.NotificationConfig) {
 	n.config = config
 }
 
-// SendNotification sends a notification for an alert request
+// SendNotification sends a notification for an alert request (using normal duration)
 func (n *NotifySendNotifier) SendNotification(request alerts.AlertRequest) error {
+	return n.SendNotificationWithContext(NotificationRequest{
+		AlertRequest: request,
+		Context:      NotificationContext{IsLate: false},
+	})
+}
+
+// SendNotificationWithContext sends a notification with context (normal vs late)
+func (n *NotifySendNotifier) SendNotificationWithContext(request NotificationRequest) error {
 	// Create template data from the event
-	data := n.createTemplateData(request.Event, request.AlertOffset)
+	data := n.createTemplateData(request.AlertRequest.Event, request.AlertRequest.AlertOffset)
 
 	// Get the template to use
-	tmpl, err := n.getTemplate(request.Template)
+	tmpl, err := n.getTemplate(request.AlertRequest.Template)
 	if err != nil {
 		// If template loading fails, send error notification and fall back to default
-		n.sendErrorNotification(request, err)
+		n.sendErrorNotification(request.AlertRequest, err)
 		tmpl = n.defaultTemplate
 	}
 
@@ -85,7 +112,7 @@ func (n *NotifySendNotifier) SendNotification(request alerts.AlertRequest) error
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		// If template execution fails, send error notification and fall back to default
-		n.sendErrorNotification(request, fmt.Errorf("template execution failed: %w", err))
+		n.sendErrorNotification(request.AlertRequest, fmt.Errorf("template execution failed: %w", err))
 		
 		// Use default template
 		buf.Reset()
@@ -94,8 +121,8 @@ func (n *NotifySendNotifier) SendNotification(request alerts.AlertRequest) error
 		}
 	}
 
-	// Send the notification
-	return n.sendDesktopNotification(data.Summary, buf.String())
+	// Send the notification with appropriate duration
+	return n.sendDesktopNotificationWithContext(data.Summary, buf.String(), request.Context)
 }
 
 // createTemplateData creates template data from an event
@@ -211,13 +238,33 @@ func (n *NotifySendNotifier) sendErrorNotification(request alerts.AlertRequest, 
 	n.sendDesktopNotification(title, message)
 }
 
-// sendDesktopNotification sends a notification using notify-send
+// sendDesktopNotification sends a notification using notify-send (backward compatibility)
 func (n *NotifySendNotifier) sendDesktopNotification(title, message string) error {
+	return n.sendDesktopNotificationWithContext(title, message, NotificationContext{IsLate: false})
+}
+
+// sendDesktopNotificationWithContext sends a notification with context-appropriate duration
+func (n *NotifySendNotifier) sendDesktopNotificationWithContext(title, message string, context NotificationContext) error {
+	// Choose duration based on context
+	var durationConfig config.DurationConfig
+	if context.IsLate {
+		durationConfig = n.config.DurationWhenLate
+	} else {
+		durationConfig = n.config.Duration
+	}
+	
+	// Convert duration to milliseconds
+	durationMs, err := durationConfig.ToMilliseconds()
+	if err != nil {
+		// Fallback to 5 seconds if conversion fails
+		durationMs = 5000
+	}
+	
 	// Prepare notify-send command
 	args := []string{
 		"notify-send",
 		"--app-name=calwatch",
-		fmt.Sprintf("--expire-time=%d", n.config.Duration),
+		fmt.Sprintf("--expire-time=%d", durationMs),
 	}
 
 	// Add title and message
@@ -292,8 +339,15 @@ func NewDBusNotifier() (*DBusNotifier, error) {
 	dbusNotifier := &DBusNotifier{
 		templates: make(map[string]*template.Template),
 		config: config.NotificationConfig{
-			Backend:  "dbus",
-			Duration: 5000,
+			Backend: "dbus",
+			Duration: config.DurationConfig{
+				Type:  "timed",
+				Value: 5,
+				Unit:  "seconds",
+			},
+			DurationWhenLate: config.DurationConfig{
+				Type: "until_dismissed",
+			},
 		},
 		conn:     conn,
 		notifier: notifier,
@@ -318,16 +372,24 @@ func (d *DBusNotifier) SetConfig(config config.NotificationConfig) {
 	d.config = config
 }
 
-// SendNotification sends a notification for an alert request
+// SendNotification sends a notification for an alert request (using normal duration)
 func (d *DBusNotifier) SendNotification(request alerts.AlertRequest) error {
+	return d.SendNotificationWithContext(NotificationRequest{
+		AlertRequest: request,
+		Context:      NotificationContext{IsLate: false},
+	})
+}
+
+// SendNotificationWithContext sends a notification with context (normal vs late)
+func (d *DBusNotifier) SendNotificationWithContext(request NotificationRequest) error {
 	// Create template data from the event
-	data := d.createTemplateData(request.Event, request.AlertOffset)
+	data := d.createTemplateData(request.AlertRequest.Event, request.AlertRequest.AlertOffset)
 
 	// Get the template to use
-	tmpl, err := d.getTemplate(request.Template)
+	tmpl, err := d.getTemplate(request.AlertRequest.Template)
 	if err != nil {
 		// If template loading fails, send error notification and fall back to default
-		d.sendErrorNotification(request, err)
+		d.sendErrorNotification(request.AlertRequest, err)
 		tmpl = d.defaultTemplate
 	}
 
@@ -335,7 +397,7 @@ func (d *DBusNotifier) SendNotification(request alerts.AlertRequest) error {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		// If template execution fails, send error notification and fall back to default
-		d.sendErrorNotification(request, fmt.Errorf("template execution failed: %w", err))
+		d.sendErrorNotification(request.AlertRequest, fmt.Errorf("template execution failed: %w", err))
 		
 		// Use default template
 		buf.Reset()
@@ -344,8 +406,8 @@ func (d *DBusNotifier) SendNotification(request alerts.AlertRequest) error {
 		}
 	}
 
-	// Send the notification
-	return d.sendDesktopNotification(data.Summary, buf.String())
+	// Send the notification with appropriate duration
+	return d.sendDesktopNotificationWithContext(data.Summary, buf.String(), request.Context)
 }
 
 // createTemplateData creates template data from an event
@@ -461,8 +523,28 @@ func (d *DBusNotifier) sendErrorNotification(request alerts.AlertRequest, err er
 	d.sendDesktopNotification(title, message)
 }
 
-// sendDesktopNotification sends a notification using D-Bus
+// sendDesktopNotification sends a notification using D-Bus (backward compatibility)
 func (d *DBusNotifier) sendDesktopNotification(title, message string) error {
+	return d.sendDesktopNotificationWithContext(title, message, NotificationContext{IsLate: false})
+}
+
+// sendDesktopNotificationWithContext sends a notification with context-appropriate duration
+func (d *DBusNotifier) sendDesktopNotificationWithContext(title, message string, context NotificationContext) error {
+	// Choose duration based on context
+	var durationConfig config.DurationConfig
+	if context.IsLate {
+		durationConfig = d.config.DurationWhenLate
+	} else {
+		durationConfig = d.config.Duration
+	}
+	
+	// Convert duration to milliseconds
+	durationMs, err := durationConfig.ToMilliseconds()
+	if err != nil {
+		// Fallback to 5 seconds if conversion fails
+		durationMs = 5000
+	}
+	
 	notification := notify.Notification{
 		AppName:       "calwatch",
 		ReplacesID:    0,
@@ -471,10 +553,10 @@ func (d *DBusNotifier) sendDesktopNotification(title, message string) error {
 		Body:          message,
 		Actions:       []notify.Action{},
 		Hints:         map[string]dbus.Variant{},
-		ExpireTimeout: time.Duration(d.config.Duration) * time.Millisecond,
+		ExpireTimeout: time.Duration(durationMs) * time.Millisecond,
 	}
 
-	_, err := d.notifier.SendNotification(notification)
+	_, err = d.notifier.SendNotification(notification)
 	if err != nil {
 		return fmt.Errorf("failed to send D-Bus notification: %w", err)
 	}

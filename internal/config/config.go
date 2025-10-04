@@ -12,9 +12,10 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	Directories  []DirectoryConfig `yaml:"directories"`
-	Notification NotificationConfig `yaml:"notification"`
-	Logging      LoggingConfig     `yaml:"logging"`
+	Directories    []DirectoryConfig   `yaml:"directories"`
+	Notification   NotificationConfig  `yaml:"notification"`
+	WakeupHandling WakeupHandlingConfig `yaml:"wakeup_handling"`
+	Logging        LoggingConfig       `yaml:"logging"`
 }
 
 // DirectoryConfig represents configuration for a single CalDAV directory
@@ -30,10 +31,27 @@ type AlertConfig struct {
 	Unit  string `yaml:"unit"`
 }
 
+// DurationConfig represents a user-friendly duration configuration
+type DurationConfig struct {
+	Type  string `yaml:"type"`            // "timed" or "until_dismissed"
+	Value int    `yaml:"value,omitempty"` // Only required for "timed" type
+	Unit  string `yaml:"unit,omitempty"`  // Only required for "timed" type
+}
+
 // NotificationConfig represents notification system configuration
 type NotificationConfig struct {
-	Backend  string `yaml:"backend"`
-	Duration int    `yaml:"duration"`
+	Backend          string         `yaml:"backend"`
+	Duration         DurationConfig `yaml:"duration"`
+	DurationWhenLate DurationConfig `yaml:"duration_when_late"`
+}
+
+// WakeupHandlingConfig represents wake-up detection and missed event handling
+type WakeupHandlingConfig struct {
+	Enable             bool           `yaml:"enable"`
+	MissedEventPolicy  string         `yaml:"missed_event_policy"`  // "all", "summary", "priority_only", "skip"
+	MaxMissedDays      int            `yaml:"max_missed_days"`
+	SummaryThreshold   int            `yaml:"summary_threshold"`
+	MaxCatchupTime     DurationConfig `yaml:"max_catchup_time"`
 }
 
 // LoggingConfig represents logging configuration
@@ -58,6 +76,78 @@ func (a AlertConfig) Duration() (time.Duration, error) {
 	}
 }
 
+// IsUntilDismissed returns true if this duration is of type "until_dismissed"
+func (d DurationConfig) IsUntilDismissed() bool {
+	return d.Type == "until_dismissed"
+}
+
+// ToMilliseconds converts the duration to milliseconds for D-Bus notifications
+func (d DurationConfig) ToMilliseconds() (int32, error) {
+	if d.IsUntilDismissed() {
+		return 0, nil // D-Bus: 0 means never auto-dismiss
+	}
+	
+	// Default to "timed" if type is not specified
+	if d.Type == "" || d.Type == "timed" {
+		duration, err := d.ToDuration()
+		if err != nil {
+			return 0, err
+		}
+		return int32(duration.Milliseconds()), nil
+	}
+	
+	return 0, fmt.Errorf("unsupported duration type: %s", d.Type)
+}
+
+// ToDuration converts DurationConfig to time.Duration (only for "timed" type)
+func (d DurationConfig) ToDuration() (time.Duration, error) {
+	if d.IsUntilDismissed() {
+		return 0, fmt.Errorf("cannot convert 'until_dismissed' duration to time.Duration")
+	}
+	
+	if d.Value <= 0 {
+		return 0, fmt.Errorf("duration value must be positive")
+	}
+	
+	switch d.Unit {
+	case "milliseconds", "millisecond", "ms":
+		return time.Duration(d.Value) * time.Millisecond, nil
+	case "seconds", "second", "s", "":
+		// Default to seconds if unit is not specified
+		return time.Duration(d.Value) * time.Second, nil
+	case "minutes", "minute", "m":
+		return time.Duration(d.Value) * time.Minute, nil
+	case "hours", "hour", "h":
+		return time.Duration(d.Value) * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("unsupported time unit: %s", d.Unit)
+	}
+}
+
+// Validate validates the DurationConfig
+func (d DurationConfig) Validate() error {
+	// Default to "timed" if type is not specified
+	if d.Type == "" {
+		return nil // Will be handled by default value in validation
+	}
+	
+	if d.Type != "timed" && d.Type != "until_dismissed" {
+		return fmt.Errorf("duration type must be 'timed' or 'until_dismissed', got: %s", d.Type)
+	}
+	
+	if d.Type == "timed" {
+		if d.Value <= 0 {
+			return fmt.Errorf("duration value must be positive for 'timed' type")
+		}
+		// Validate that we can convert to duration
+		_, err := d.ToDuration()
+		return err
+	}
+	
+	// For "until_dismissed", value and unit are not required
+	return nil
+}
+
 // ExpandPath expands ~ and environment variables in paths
 func (d *DirectoryConfig) ExpandPath() error {
 	expanded := os.ExpandEnv(d.Directory)
@@ -72,7 +162,7 @@ func (d *DirectoryConfig) ExpandPath() error {
 	return nil
 }
 
-// Validate checks if the configuration is valid
+// Validate checks if the configuration is valid and applies defaults
 func (c *Config) Validate() error {
 	if len(c.Directories) == 0 {
 		return fmt.Errorf("at least one directory must be configured")
@@ -104,12 +194,68 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate notification backend
+	// Validate and apply defaults for notification configuration
 	if c.Notification.Backend == "" {
 		c.Notification.Backend = "notify-send"
 	}
 	if c.Notification.Backend != "notify-send" {
 		return fmt.Errorf("unsupported notification backend: %s", c.Notification.Backend)
+	}
+
+	// Apply defaults for notification duration
+	if c.Notification.Duration.Type == "" {
+		c.Notification.Duration = DurationConfig{
+			Type:  "timed",
+			Value: 5,
+			Unit:  "seconds",
+		}
+	}
+	if err := c.Notification.Duration.Validate(); err != nil {
+		return fmt.Errorf("notification duration: %w", err)
+	}
+
+	// Apply defaults for late notification duration
+	if c.Notification.DurationWhenLate.Type == "" {
+		c.Notification.DurationWhenLate = DurationConfig{
+			Type: "until_dismissed",
+		}
+	}
+	if err := c.Notification.DurationWhenLate.Validate(); err != nil {
+		return fmt.Errorf("notification duration_when_late: %w", err)
+	}
+
+	// Apply defaults and validate wake-up handling
+	if c.WakeupHandling.MissedEventPolicy == "" {
+		c.WakeupHandling.MissedEventPolicy = "all"
+	}
+	validPolicies := map[string]bool{
+		"all":           true,
+		"summary":       true,
+		"priority_only": true,
+		"skip":          true,
+	}
+	if !validPolicies[c.WakeupHandling.MissedEventPolicy] {
+		return fmt.Errorf("invalid missed_event_policy: %s", c.WakeupHandling.MissedEventPolicy)
+	}
+
+	if c.WakeupHandling.MaxMissedDays <= 0 {
+		c.WakeupHandling.MaxMissedDays = 7
+	}
+
+	if c.WakeupHandling.SummaryThreshold <= 0 {
+		c.WakeupHandling.SummaryThreshold = 5
+	}
+
+	// Apply defaults for max catchup time
+	if c.WakeupHandling.MaxCatchupTime.Type == "" {
+		c.WakeupHandling.MaxCatchupTime = DurationConfig{
+			Type:  "timed",
+			Value: 30,
+			Unit:  "seconds",
+		}
+	}
+	if err := c.WakeupHandling.MaxCatchupTime.Validate(); err != nil {
+		return fmt.Errorf("wakeup_handling max_catchup_time: %w", err)
 	}
 
 	// Validate logging level
@@ -181,8 +327,26 @@ func DefaultConfig() *Config {
 			},
 		},
 		Notification: NotificationConfig{
-			Backend:  "notify-send",
-			Duration: 5000,
+			Backend: "notify-send",
+			Duration: DurationConfig{
+				Type:  "timed",
+				Value: 5,
+				Unit:  "seconds",
+			},
+			DurationWhenLate: DurationConfig{
+				Type: "until_dismissed",
+			},
+		},
+		WakeupHandling: WakeupHandlingConfig{
+			Enable:            true,
+			MissedEventPolicy: "all",
+			MaxMissedDays:     7,
+			SummaryThreshold:  5,
+			MaxCatchupTime: DurationConfig{
+				Type:  "timed",
+				Value: 30,
+				Unit:  "seconds",
+			},
 		},
 		Logging: LoggingConfig{
 			Level: "info",

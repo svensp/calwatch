@@ -10,6 +10,7 @@ type EventStorage interface {
 	UpsertEvent(event Event) error
 	DeleteEvent(uid string) error
 	GetEventsForDay(date time.Time) []Event
+	GetEventsWithinRange(start, end time.Time) []Event
 	GetUpcomingEvents(from time.Time, duration time.Duration) []Event
 	RegenerateIndex(date time.Time) error
 	GetAllEvents() []Event
@@ -90,6 +91,23 @@ func (s *MemoryEventStorage) GetEventsForDay(date time.Time) []Event {
 	}
 	
 	return []Event{}
+}
+
+// GetEventsWithinRange returns all events that occur within the specified time range
+func (s *MemoryEventStorage) GetEventsWithinRange(start, end time.Time) []Event {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	
+	var eventsInRange []Event
+	
+	for _, event := range s.events {
+		occurrences := event.OccurredWithin(start, end)
+		if len(occurrences) > 0 {
+			eventsInRange = append(eventsInRange, event)
+		}
+	}
+	
+	return eventsInRange
 }
 
 // GetUpcomingEvents returns events that will occur within a specific duration from the given time
