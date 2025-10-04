@@ -26,7 +26,7 @@ type Event interface {
 	OccursOn(date time.Time) bool
 	OccurredWithin(start, end time.Time) []time.Time
 	NextOccurrence(after time.Time) *time.Time
-	ShouldAlert(now time.Time, alertOffset time.Duration) bool
+	ShouldAlert(lastTick, now time.Time, alertOffset time.Duration) bool
 	GetAlertState(alertOffset time.Duration) AlertState
 	SetAlertState(alertOffset time.Duration, state AlertState)
 }
@@ -130,9 +130,9 @@ func (e *CalendarEvent) OccurredWithin(start, end time.Time) []time.Time {
 	endInTz := end.In(eventTz)
 	eventStartInTz := e.StartTime.In(eventTz)
 	
-	// Check if the original occurrence falls within the range
+	// Check if the original occurrence falls within the range (inclusive bounds)
 	if (eventStartInTz.After(startInTz) || eventStartInTz.Equal(startInTz)) &&
-		eventStartInTz.Before(endInTz) &&
+		(eventStartInTz.Before(endInTz) || eventStartInTz.Equal(endInTz)) &&
 		!e.isExceptionDate(e.StartTime) {
 		occurrences = append(occurrences, e.StartTime)
 	}
@@ -155,8 +155,8 @@ func (e *CalendarEvent) NextOccurrence(after time.Time) *time.Time {
 	return nil
 }
 
-// ShouldAlert determines if an alert should be sent for this event
-func (e *CalendarEvent) ShouldAlert(now time.Time, alertOffset time.Duration) bool {
+// ShouldAlert determines if an alert should be sent for this event within the given time range
+func (e *CalendarEvent) ShouldAlert(lastTick, now time.Time, alertOffset time.Duration) bool {
 	e.mutex.RLock()
 	defer e.mutex.RUnlock()
 	
@@ -165,15 +165,27 @@ func (e *CalendarEvent) ShouldAlert(now time.Time, alertOffset time.Duration) bo
 		return false
 	}
 	
-	// Find the next occurrence
-	nextOccurrence := e.NextOccurrence(now)
-	if nextOccurrence == nil {
+	// We need to check a broader range to find events whose alert times fall within [lastTick, now]
+	// If alert offset is X, we need to look for events that occur up to X time after 'now'
+	searchStart := lastTick
+	searchEnd := now.Add(alertOffset)
+	
+	// Find all occurrences within the expanded search range
+	occurrences := e.OccurredWithin(searchStart, searchEnd)
+	if len(occurrences) == 0 {
 		return false
 	}
 	
-	// Check if we should alert (now + alertOffset >= event time)
-	alertTime := nextOccurrence.Add(-alertOffset)
-	return now.After(alertTime) || now.Equal(alertTime)
+	// Check if any occurrence has its alert time within our target range [lastTick, now]
+	for _, occurrence := range occurrences {
+		alertTime := occurrence.Add(-alertOffset)
+		// Alert should fire if: lastTick < alertTime <= now
+		if alertTime.After(lastTick) && (now.After(alertTime) || now.Equal(alertTime)) {
+			return true
+		}
+	}
+	
+	return false
 }
 
 // GetAlertState returns the current alert state for a specific offset

@@ -69,6 +69,15 @@ func (s *MinuteBasedScheduler) CheckAlerts() []AlertRequest {
 	now := time.Now()
 	today := now.Truncate(24 * time.Hour)
 	
+	// Get the last tick time - use current time minus 1 minute as fallback for first run
+	var lastTick time.Time
+	if s.stateManager != nil {
+		lastTick = s.stateManager.GetLastAlertTick()
+	}
+	if lastTick.IsZero() {
+		lastTick = now.Add(-time.Minute) // Default to 1 minute ago for first run
+	}
+	
 	// Get events for today and tomorrow (to catch alerts for events starting early tomorrow)
 	var allEvents []storage.Event
 	allEvents = append(allEvents, s.eventStorage.GetEventsForDay(today)...)
@@ -78,7 +87,7 @@ func (s *MinuteBasedScheduler) CheckAlerts() []AlertRequest {
 
 	// Check each event against all directory configs to find applicable alerts
 	for _, event := range allEvents {
-		alertRequests = append(alertRequests, s.checkEventAlerts(event, now)...)
+		alertRequests = append(alertRequests, s.checkEventAlerts(event, lastTick, now)...)
 	}
 
 	s.lastCheckTime = now.Truncate(time.Minute)
@@ -92,7 +101,7 @@ func (s *MinuteBasedScheduler) CheckAlerts() []AlertRequest {
 }
 
 // checkEventAlerts checks a single event for all applicable alerts
-func (s *MinuteBasedScheduler) checkEventAlerts(event storage.Event, now time.Time) []AlertRequest {
+func (s *MinuteBasedScheduler) checkEventAlerts(event storage.Event, lastTick, now time.Time) []AlertRequest {
 	var requests []AlertRequest
 
 	// For each directory config, check if any alerts should fire
@@ -103,8 +112,8 @@ func (s *MinuteBasedScheduler) checkEventAlerts(event storage.Event, now time.Ti
 				continue // Skip invalid alert configs
 			}
 
-			// Check if this event should alert for this offset
-			if event.ShouldAlert(now, alertOffset) {
+			// Check if this event should alert for this offset using range-based checking
+			if event.ShouldAlert(lastTick, now, alertOffset) {
 				// Mark alert as sent to prevent duplicates
 				event.SetAlertState(alertOffset, storage.AlertSent)
 

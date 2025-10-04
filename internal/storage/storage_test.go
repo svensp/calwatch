@@ -228,21 +228,23 @@ func TestCalendarEvent_ShouldAlert(t *testing.T) {
 	
 	alertOffset := 5 * time.Minute
 	
-	// Test before alert time
+	// Test before alert time - checking from 20 minutes before to 10 minutes before
+	lastTick := eventTime.Add(-20 * time.Minute)
 	checkTime := eventTime.Add(-10 * time.Minute)
-	if event.ShouldAlert(checkTime, alertOffset) {
+	if event.ShouldAlert(lastTick, checkTime, alertOffset) {
 		t.Errorf("Should not alert 10 minutes before when offset is 5 minutes")
 	}
 	
-	// Test at alert time
+	// Test at alert time - checking from 10 minutes before to alert time
+	lastTick = eventTime.Add(-10 * time.Minute)
 	checkTime = eventTime.Add(-alertOffset)
-	if !event.ShouldAlert(checkTime, alertOffset) {
+	if !event.ShouldAlert(lastTick, checkTime, alertOffset) {
 		t.Errorf("Should alert at exact alert time")
 	}
 	
 	// Test after alert sent
 	event.SetAlertState(alertOffset, AlertSent)
-	if event.ShouldAlert(checkTime, alertOffset) {
+	if event.ShouldAlert(lastTick, checkTime, alertOffset) {
 		t.Errorf("Should not alert when already sent")
 	}
 }
