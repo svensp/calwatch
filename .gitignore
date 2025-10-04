@@ -51,3 +51,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+result
+calwatch
+.go
