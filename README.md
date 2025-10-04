@@ -22,6 +22,10 @@ at your own discretion.
 - **Systemd integration** for background daemon operation
 - **No database dependency** - direct ICS file parsing
 - **Memory efficient** with daily event indexing
+- **🔋 Laptop-optimized**: Sleep/wake detection with missed event recovery
+- **🎯 Smart notifications**: Different durations for normal vs. missed events
+- **⚙️ User-friendly config**: Human-readable durations (no more magic milliseconds)
+- **📱 Flexible policies**: Configure how to handle missed events (all/summary/priority/skip)
 
 ## Use Case
 
@@ -30,6 +34,7 @@ Perfect for users who:
 - Use tiling window managers (Hyprland, Sway, i3)
 - Want calendar notifications without running a full calendar application
 - Prefer lightweight, terminal-focused tools
+- **Use laptops** that frequently sleep/hibernate and need reliable event catch-up
 
 ## Installation
 
@@ -39,48 +44,67 @@ Perfect for users who:
 - D-Bus session bus (standard on most Linux desktop environments)
 - A CalDAV sync solution like vdirsyncer
 
-### NixOS Installation (Recommended)
+### NixOS/Home Manager Installation
 
-#### Using Flakes
-
-```bash
-# Install directly from the repository
-nix profile install github:yourusername/calwatch
-
-# Or build locally
-git clone https://github.com/yourusername/calwatch.git
-cd calwatch
-nix build
-sudo cp result/bin/calwatch /usr/local/bin/
-```
-
-#### NixOS System Configuration
-
-Add to your `configuration.nix`:
+Add CalWatch to your Home Manager configuration:
 
 ```nix
+{ config, pkgs, lib, ... }:
+let
+  calwatch = pkgs.callPackage (builtins.fetchGit {
+    url = "https://github.com/svensp/calwatch";
+    ref = "main";
+  } + "/default.nix") {};
+in
 {
-  services.calwatch = {
-    enable = true;
-    user = "yourusername";
-    settings = {
-      directories = [
-        {
-          directory = "/home/yourusername/.calendars/personal";
-          template = "detailed.tpl";
-          automatic_alerts = [
-            { value = 15; unit = "minutes"; }
-            { value = 1; unit = "hours"; }
-          ];
-        }
+  # Install calwatch package
+  home.packages = [ calwatch ];
+
+  # CalWatch configuration
+  xdg.configFile."calwatch/config.yaml".text = ''
+    directories:
+      - directory: ~/.calendars/personal
+        template: default.tpl
+        automatic_alerts:
+          - value: 15
+            unit: minutes
+          - value: 1
+            unit: hours
+
+    notification:
+      backend: notify-send
+      duration:
+        type: timed
+        value: 5
+        unit: seconds
+      duration_when_late:
+        type: until_dismissed
+
+    wakeup_handling:
+      enable: true
+      missed_event_policy: all
+
+    logging:
+      level: info
+  '';
+
+  # CalWatch service
+  systemd.user.services.calwatch = {
+    Unit = {
+      Description = "Calendar event notification daemon";
+      After = [ "graphical-session.target" ];
+    };
+    Service = {
+      Type = "simple";
+      ExecStart = "${calwatch}/bin/calwatch";
+      Restart = "on-failure";
+      RestartSec = "5";
+      Environment = [
+        "PATH=${pkgs.libnotify}/bin:/run/current-system/sw/bin"
       ];
-      notification = {
-        backend = "dbus";  # Default, no external dependencies
-        duration = 5000;
-      };
-      logging = {
-        level = "info";
-      };
+    };
+    Install = {
+      WantedBy = [ "graphical-session.target" ];
     };
   };
 }
@@ -96,10 +120,10 @@ nix develop
 nix-shell
 ```
 
-### Build from Source (Non-NixOS)
+### Build from Source
 
 ```bash
-git clone https://github.com/yourusername/calwatch.git
+git clone https://github.com/svensp/calwatch.git
 cd calwatch
 
 # Build
@@ -150,7 +174,24 @@ directories:
 
 notification:
   backend: notify-send
-  duration: 5000
+  # Normal notification duration
+  duration:
+    type: timed
+    value: 5
+    unit: seconds
+  # Duration for missed/late notifications
+  duration_when_late:
+    type: until_dismissed  # Requires user action to dismiss
+
+# Sleep/wake handling for laptop users
+wakeup_handling:
+  enable: true
+  missed_event_policy: all           # all, summary, priority_only, skip
+  max_missed_days: 7                 # Limit how far back to process
+  summary_threshold: 5               # Show summary if more than N events
+  max_catchup_time:
+    value: 30
+    unit: seconds
 
 logging:
   level: info
@@ -186,6 +227,58 @@ Create custom templates in `~/.config/calwatch/templates/`:
 - `{{.Duration}}` - Event duration (human readable)
 - `{{.AlertOffset}}` - Alert timing (e.g. "15 minutes")
 - `{{.UID}}` - Event unique identifier
+
+### 🔋 Laptop Sleep/Wake Handling
+
+CalWatch is optimized for laptop users who frequently sleep/hibernate their machines. When the system wakes up, CalWatch automatically detects the gap and processes any missed events.
+
+#### Missed Event Policies
+
+Configure how CalWatch handles events that were missed during sleep:
+
+```yaml
+wakeup_handling:
+  missed_event_policy: all  # Choose one of four policies
+```
+
+**Policy Options:**
+
+- **`all`** - Show every missed event individually (good for light calendar usage)
+- **`summary`** - Group missed events into summary notifications when threshold exceeded
+- **`priority_only`** - Only show high-priority missed events (meetings, deadlines, etc.)
+- **`skip`** - Clean slate approach, skip all missed events (useful after vacations)
+
+#### Smart Priority Detection
+
+CalWatch automatically classifies events by priority based on:
+- **Keywords**: "meeting", "deadline", "urgent", "interview", etc.
+- **Attendees**: Events with multiple people are prioritized
+- **Work indicators**: Events in work calendars or with work-related keywords
+- **Time sensitivity**: Events starting soon get higher priority
+
+#### Notification Duration Types
+
+```yaml
+notification:
+  # Normal notifications (auto-dismiss)
+  duration:
+    type: timed
+    value: 5
+    unit: seconds
+    
+  # Missed notifications (require user action)
+  duration_when_late:
+    type: until_dismissed
+```
+
+**Duration Types:**
+- `timed` - Auto-dismiss after specified time (default behavior)
+- `until_dismissed` - Persistent notification requiring user click
+
+**Supported Time Units:**
+- `milliseconds` (ms)
+- `seconds` (default, most user-friendly) 
+- `minutes` (for very long notifications)
 
 ## Systemd Integration
 
@@ -235,6 +328,70 @@ password = "your-password"
 
 Then configure CalWatch to watch `~/.calendars/personal`.
 
+## 🔧 Troubleshooting
+
+### Missed Events Not Working
+
+If missed events aren't being detected after sleep:
+
+1. **Check wake-up handling is enabled:**
+   ```yaml
+   wakeup_handling:
+     enable: true
+   ```
+
+2. **Verify state file location:**
+   ```bash
+   ls -la ~/.local/state/calwatch/state.json
+   ```
+
+3. **Check daemon logs:**
+   ```bash
+   journalctl --user -f -u calwatch@$(id -u).service
+   ```
+
+### Notifications Not Persistent
+
+If missed event notifications aren't staying visible:
+
+1. **Check duration configuration:**
+   ```yaml
+   notification:
+     duration_when_late:
+       type: until_dismissed  # Not "timed"
+   ```
+
+2. **Verify D-Bus support:**
+   ```bash
+   # Test D-Bus notifications
+   notify-send --expire-time=0 "Test" "This should stay until clicked"
+   ```
+
+### Performance Issues After Long Sleep
+
+If CalWatch is slow after extended sleep periods:
+
+1. **Reduce catchup time limit:**
+   ```yaml
+   wakeup_handling:
+     max_catchup_time:
+       value: 10    # Reduce from 30 seconds
+       unit: seconds
+   ```
+
+2. **Limit missed days processed:**
+   ```yaml
+   wakeup_handling:
+     max_missed_days: 3  # Reduce from 7 days
+   ```
+
+3. **Use summary policy for many events:**
+   ```yaml
+   wakeup_handling:
+     missed_event_policy: summary
+     summary_threshold: 3
+   ```
+
 ## Command Line Interface
 
 ```bash
@@ -249,12 +406,13 @@ calwatch stop           # Stop the daemon (planned)
 
 CalWatch follows a clean, modular architecture:
 
-- **Config** - YAML configuration with XDG directory support
-- **Storage** - In-memory event storage with daily indexing
-- **Parser** - ICS file parsing using gocal library
+- **Config** - YAML configuration with XDG directory support and user-friendly durations
+- **Storage** - In-memory event storage with daily indexing and persistent state management
+- **Parser** - ICS file parsing using gocal library with timezone awareness
 - **Watcher** - File system monitoring via fsnotify/inotify
-- **Alerts** - Minute-based alert scheduling logic
-- **Notifications** - Template rendering and desktop notification delivery
+- **Alerts** - Minute-based alert scheduling with wake-up detection and missed event processing
+- **Notifications** - Template rendering and desktop notification delivery with context-aware durations
+- **State** - XDG-compliant persistent state tracking for reliable sleep/wake recovery
 
 See [design.md](docs/design.md) for detailed architecture documentation.
 
@@ -324,12 +482,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Roadmap
 
-- [ ] Enhanced RRULE support for complex recurring patterns
-- [ ] Multiple notification backends (mako, dunst direct API)
-- [ ] Snooze and dismiss functionality
-- [ ] Web interface for configuration
-- [ ] Integration with other calendar applications
-- [ ] Mobile notifications via push services
+- [ ] Support for ICS event VALARM components (respect event-defined alerts in addition to global configuration)
+- [ ] Snooze and dismiss functionality with D-Bus action buttons to silence remaining alerts for specific event occurrences
+- [ ] Alert policies for context-aware notifications (e.g., day-long events get 1 week/2 days/1 day alerts instead of minutes-before)
 
 ## Support
 
