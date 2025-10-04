@@ -168,3 +168,15 @@ When working on improvements to CalWatch, document each improvement in `docs/imp
 This pattern helps track the evolution of the project and provides context for future development decisions.
 
 **Important**: Every improvement implementation MUST include updating the README.md file to document the new functionality for users.
+
+## Version Management
+
+### Semantic Versioning Requirements
+
+All improvements MUST update the version number in `default.nix` following semantic versioning rules:
+
+- **Major version** (X.0.0): Breaking changes that require user action (configuration format changes, API breaking changes)
+- **Minor version** (X.Y.0): New features that are backward compatible (new functionality, enhancements)
+- **Patch version** (X.Y.Z): Bug fixes and internal improvements that don't change external behavior
+
+**Pre-1.0.0 Exception**: Since CalWatch is pre-1.0.0, breaking changes should increment the minor version instead of major version (0.X.0).
