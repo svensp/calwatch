@@ -7,6 +7,7 @@ import (
 
 // EventStorage manages in-memory event storage with efficient indexing
 type EventStorage interface {
+	// Event management (existing)
 	UpsertEvent(event Event) error
 	UpsertEventWithFile(event Event, filename string) error
 	DeleteEvent(uid string) error
@@ -17,6 +18,13 @@ type EventStorage interface {
 	RegenerateIndex(date time.Time) error
 	GetAllEvents() []Event
 	Clear() error
+	
+	// Calendar management (new)
+	EnsureCalendar(path string, template string, automaticAlerts []Alert) *Calendar
+	GetCalendar(path string) (*Calendar, bool)
+	GetAllCalendars() map[string]*Calendar
+	UpdateCalendarAlerts(path string, automaticAlerts []Alert) error
+	RemoveCalendar(path string) error
 }
 
 // MemoryEventStorage implements EventStorage using in-memory maps
@@ -30,6 +38,9 @@ type MemoryEventStorage struct {
 	// File tracking - bidirectional mapping between filenames and UIDs
 	fileToUID map[string]string  // filename -> UID
 	uidToFile map[string]string  // UID -> filename
+	
+	// Calendar management - path -> *Calendar
+	calendars map[string]*Calendar
 	
 	// Current indexed date
 	currentIndexDate time.Time
@@ -45,6 +56,7 @@ func NewMemoryEventStorage() *MemoryEventStorage {
 		dailyIndex: make(map[string][]Event),
 		fileToUID:  make(map[string]string),
 		uidToFile:  make(map[string]string),
+		calendars:  make(map[string]*Calendar),
 		mutex:      sync.RWMutex{},
 	}
 }
@@ -164,8 +176,24 @@ func (s *MemoryEventStorage) GetEventsWithinRange(start, end time.Time) []Event 
 	var eventsInRange []Event
 	
 	for _, event := range s.events {
-		occurrences := event.OccurredWithin(start, end)
-		if len(occurrences) > 0 {
+		// Use OccurrencesWithin and extract unique event times
+		occurrences := event.OccurrencesWithin(start, end)
+		eventTimes := make(map[time.Time]bool)
+		for _, occ := range occurrences {
+			eventTimes[occ.EventTime] = true
+		}
+		
+		// If no occurrences found (no alerts), fallback to checking event dates directly
+		if len(eventTimes) == 0 {
+			if calEvent, ok := event.(*CalendarEvent); ok {
+				rawEventTimes := calEvent.getEventOccurrences(start, end)
+				for _, eventTime := range rawEventTimes {
+					eventTimes[eventTime] = true
+				}
+			}
+		}
+		
+		if len(eventTimes) > 0 {
 			eventsInRange = append(eventsInRange, event)
 		}
 	}
@@ -182,8 +210,26 @@ func (s *MemoryEventStorage) GetUpcomingEvents(from time.Time, duration time.Dur
 	until := from.Add(duration)
 	
 	for _, event := range s.events {
-		nextOccurrence := event.NextOccurrence(from)
-		if nextOccurrence != nil && nextOccurrence.Before(until) {
+		// Check if event occurs within the time range using self-contained logic
+		// We'll use a small time slice to find any event times in the range
+		occurrences := event.OccurrencesWithin(from, until)
+		eventTimes := make(map[time.Time]bool)
+		for _, occ := range occurrences {
+			eventTimes[occ.EventTime] = true
+		}
+		
+		// If no occurrences found (no alerts), fallback to checking event dates directly
+		if len(eventTimes) == 0 {
+			// Use getEventOccurrences if it were public, or check if event occurs in date range
+			if calEvent, ok := event.(*CalendarEvent); ok {
+				rawEventTimes := calEvent.getEventOccurrences(from, until)
+				for _, eventTime := range rawEventTimes {
+					eventTimes[eventTime] = true
+				}
+			}
+		}
+		
+		if len(eventTimes) > 0 {
 			upcoming = append(upcoming, event)
 		}
 	}
@@ -255,6 +301,7 @@ func (s *MemoryEventStorage) Clear() error {
 	s.dailyIndex = make(map[string][]Event)
 	s.fileToUID = make(map[string]string)
 	s.uidToFile = make(map[string]string)
+	s.calendars = make(map[string]*Calendar)
 	s.currentIndexDate = time.Time{}
 	
 	return nil
@@ -271,4 +318,62 @@ func (s *MemoryEventStorage) GetEventCount() int {
 // formatDateKey formats a date as YYYY-MM-DD for use as map key
 func formatDateKey(date time.Time) string {
 	return date.Format("2006-01-02")
+}
+
+// EnsureCalendar creates or returns existing Calendar for the given path
+func (s *MemoryEventStorage) EnsureCalendar(path string, template string, automaticAlerts []Alert) *Calendar {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	
+	if calendar, exists := s.calendars[path]; exists {
+		return calendar
+	}
+	
+	calendar := NewCalendar(path, template, automaticAlerts)
+	s.calendars[path] = calendar
+	return calendar
+}
+
+// GetCalendar returns the Calendar for the given path
+func (s *MemoryEventStorage) GetCalendar(path string) (*Calendar, bool) {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	
+	calendar, exists := s.calendars[path]
+	return calendar, exists
+}
+
+// GetAllCalendars returns all Calendars
+func (s *MemoryEventStorage) GetAllCalendars() map[string]*Calendar {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	
+	result := make(map[string]*Calendar)
+	for path, calendar := range s.calendars {
+		result[path] = calendar
+	}
+	return result
+}
+
+// UpdateCalendarAlerts updates the automatic alerts for a Calendar
+func (s *MemoryEventStorage) UpdateCalendarAlerts(path string, automaticAlerts []Alert) error {
+	s.mutex.RLock()
+	calendar, exists := s.calendars[path]
+	s.mutex.RUnlock()
+	
+	if !exists {
+		return nil // Calendar doesn't exist, nothing to update
+	}
+	
+	calendar.UpdateAutomaticAlerts(automaticAlerts)
+	return nil
+}
+
+// RemoveCalendar removes a Calendar from storage
+func (s *MemoryEventStorage) RemoveCalendar(path string) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	
+	delete(s.calendars, path)
+	return nil
 }

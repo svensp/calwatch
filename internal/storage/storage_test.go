@@ -4,12 +4,14 @@ import (
 	"testing"
 	"time"
 	
-	"calwatch/internal/config"
 	"calwatch/internal/recurrence"
 )
 
 func TestMemoryEventStorage_UpsertAndGet(t *testing.T) {
 	storage := NewMemoryEventStorage()
+	
+	// Create test calendar
+	calendar := NewCalendar("/test/path", "test.tpl", []Alert{})
 	
 	// Create test event
 	event := NewCalendarEvent(
@@ -21,6 +23,8 @@ func TestMemoryEventStorage_UpsertAndGet(t *testing.T) {
 		time.Date(2023, 10, 15, 15, 0, 0, 0, time.UTC),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	// Test upsert
@@ -43,6 +47,9 @@ func TestMemoryEventStorage_UpsertAndGet(t *testing.T) {
 func TestMemoryEventStorage_Delete(t *testing.T) {
 	storage := NewMemoryEventStorage()
 	
+	// Create test calendar
+	calendar := NewCalendar("/test/path", "test.tpl", []Alert{})
+	
 	// Create and add test event
 	event := NewCalendarEvent(
 		"test-uid-1",
@@ -53,6 +60,8 @@ func TestMemoryEventStorage_Delete(t *testing.T) {
 		time.Date(2023, 10, 15, 15, 0, 0, 0, time.UTC),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	storage.UpsertEvent(event)
@@ -77,6 +86,9 @@ func TestMemoryEventStorage_Delete(t *testing.T) {
 func TestMemoryEventStorage_GetEventsForDay(t *testing.T) {
 	storage := NewMemoryEventStorage()
 	
+	// Create test calendar
+	calendar := NewCalendar("/test/path", "test.tpl", []Alert{})
+	
 	// Create events for different days
 	event1 := NewCalendarEvent(
 		"event-1",
@@ -87,6 +99,8 @@ func TestMemoryEventStorage_GetEventsForDay(t *testing.T) {
 		time.Date(2023, 10, 15, 15, 0, 0, 0, time.UTC),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	event2 := NewCalendarEvent(
@@ -98,6 +112,8 @@ func TestMemoryEventStorage_GetEventsForDay(t *testing.T) {
 		time.Date(2023, 10, 16, 15, 0, 0, 0, time.UTC),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	storage.UpsertEvent(event1)
@@ -127,6 +143,9 @@ func TestMemoryEventStorage_GetUpcomingEvents(t *testing.T) {
 	
 	now := time.Date(2023, 10, 15, 10, 0, 0, 0, time.UTC)
 	
+	// Create test calendar
+	calendar := NewCalendar("/test/path", "test.tpl", []Alert{})
+	
 	// Create events at different times
 	event1 := NewCalendarEvent(
 		"event-1",
@@ -137,6 +156,8 @@ func TestMemoryEventStorage_GetUpcomingEvents(t *testing.T) {
 		now.Add(90*time.Minute),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	event2 := NewCalendarEvent(
@@ -148,6 +169,8 @@ func TestMemoryEventStorage_GetUpcomingEvents(t *testing.T) {
 		now.Add(3*time.Hour),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	event3 := NewCalendarEvent(
@@ -159,6 +182,8 @@ func TestMemoryEventStorage_GetUpcomingEvents(t *testing.T) {
 		now.Add(26*time.Hour),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	storage.UpsertEvent(event1)
@@ -185,6 +210,9 @@ func TestMemoryEventStorage_GetUpcomingEvents(t *testing.T) {
 }
 
 func TestCalendarEvent_AlertStates(t *testing.T) {
+	// Create test calendar
+	calendar := NewCalendar("/test/path", "test.tpl", []Alert{})
+	
 	event := NewCalendarEvent(
 		"test-uid",
 		"Test Event",
@@ -194,6 +222,8 @@ func TestCalendarEvent_AlertStates(t *testing.T) {
 		time.Date(2023, 10, 15, 15, 0, 0, 0, time.UTC),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	alertOffset := 5 * time.Minute
@@ -217,6 +247,12 @@ func TestCalendarEvent_AlertStates(t *testing.T) {
 }
 
 func TestCalendarEvent_OccurrencesWithin(t *testing.T) {
+	// Create test calendar with alert
+	configAlerts := []Alert{
+		{Offset: 5 * time.Minute, Important: false, Source: AlertSourceConfig, Action: AlertActionDisplay},
+	}
+	calendar := NewCalendar("/test/path", "test.tpl", configAlerts)
+	
 	eventTime := time.Date(2023, 10, 15, 14, 0, 0, 0, time.UTC)
 	event := NewCalendarEvent(
 		"test-uid",
@@ -227,17 +263,16 @@ func TestCalendarEvent_OccurrencesWithin(t *testing.T) {
 		eventTime.Add(time.Hour),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]Alert{},
 	)
 	
 	alertOffset := 5 * time.Minute
-	alerts := []config.AlertConfig{
-		{Value: 5, Unit: "minutes", Important: false},
-	}
 	
 	// Test before alert time - checking from 20 minutes before to 10 minutes before
 	lastTick := eventTime.Add(-20 * time.Minute)
 	checkTime := eventTime.Add(-10 * time.Minute)
-	occurrences := event.OccurrencesWithin(lastTick, checkTime, alerts)
+	occurrences := event.OccurrencesWithin(lastTick, checkTime)
 	if len(occurrences) > 0 {
 		t.Errorf("Should not have occurrences 10 minutes before when offset is 5 minutes")
 	}
@@ -245,7 +280,7 @@ func TestCalendarEvent_OccurrencesWithin(t *testing.T) {
 	// Test at alert time - checking from 10 minutes before to alert time
 	lastTick = eventTime.Add(-10 * time.Minute)
 	checkTime = eventTime.Add(-alertOffset)
-	occurrences = event.OccurrencesWithin(lastTick, checkTime, alerts)
+	occurrences = event.OccurrencesWithin(lastTick, checkTime)
 	if len(occurrences) != 1 {
 		t.Errorf("Should have exactly one occurrence at alert time, got %d", len(occurrences))
 	}

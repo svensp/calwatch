@@ -106,33 +106,55 @@ func (s *MinuteBasedScheduler) CheckAlerts() []AlertRequest {
 func (s *MinuteBasedScheduler) checkEventAlerts(event storage.Event, lastTick, now time.Time) []AlertRequest {
 	var requests []AlertRequest
 
-	// For each directory config, get occurrences using the new approach
-	for _, dirConfig := range s.directoryConfigs {
-		// Use the new OccurrencesWithin method to get all alert occurrences
-		occurrences := event.OccurrencesWithin(lastTick, now, dirConfig.AutomaticAlerts)
-		
-		for _, occurrence := range occurrences {
-			// Check if alert was already sent for this occurrence
-			if state := event.GetAlertState(occurrence.Offset); state == storage.AlertSent {
-				continue // Skip already sent alerts
-			}
-			
-			// Mark alert as sent to prevent duplicates
-			event.SetAlertState(occurrence.Offset, storage.AlertSent)
-
-			// Create alert request with occurrence context
-			request := AlertRequest{
-				Event:       event,
-				AlertOffset: occurrence.Offset,
-				Template:    dirConfig.Template,
-				Important:   occurrence.Important,
-				Late:        occurrence.Late,
-			}
-			requests = append(requests, request)
+	// Use the self-contained OccurrencesWithin method to get all alert occurrences
+	// Events now know their own Calendar and alert policy
+	occurrences := event.OccurrencesWithin(lastTick, now)
+	
+	for _, occurrence := range occurrences {
+		// Check if alert was already sent for this occurrence
+		if state := event.GetAlertState(occurrence.Offset); state == storage.AlertSent {
+			continue // Skip already sent alerts
 		}
+		
+		// Mark alert as sent to prevent duplicates
+		event.SetAlertState(occurrence.Offset, storage.AlertSent)
+
+		// Find the appropriate template by looking up the event's calendar
+		template := s.getTemplateForEvent(event)
+
+		// Create alert request with occurrence context
+		request := AlertRequest{
+			Event:       event,
+			AlertOffset: occurrence.Offset,
+			Template:    template,
+			Important:   occurrence.Important,
+			Late:        occurrence.Late,
+		}
+		requests = append(requests, request)
 	}
 
 	return requests
+}
+
+// getTemplateForEvent finds the appropriate template for an event by checking its calendar
+func (s *MinuteBasedScheduler) getTemplateForEvent(event storage.Event) string {
+	// If we have Calendar-aware events, try to get template from the Calendar
+	if calEvent, ok := event.(*storage.CalendarEvent); ok {
+		if calendar := calEvent.GetCalendar(); calendar != nil {
+			return calendar.GetTemplate()
+		}
+	}
+	
+	// Fallback: find template from directory configs by checking event's implied path
+	// This is a temporary bridge until full Calendar integration
+	for _, dirConfig := range s.directoryConfigs {
+		// For now, use the first directory config as fallback
+		// In a future improvement, we could match by path or other criteria
+		return dirConfig.Template
+	}
+	
+	// Last resort fallback
+	return "default"
 }
 
 // DetectWakeup detects if the system has been asleep/shutdown by comparing current time with last tick
@@ -214,28 +236,28 @@ func (s *MinuteBasedScheduler) CheckMissedAlerts(lastTick, currentTime time.Time
 func (s *MinuteBasedScheduler) checkMissedEventAlerts(event storage.Event, occurrence time.Time, lastTick time.Time, wakeupConfig config.WakeupHandlingConfig) []AlertRequest {
 	var requests []AlertRequest
 	
-	// For each directory config, use the new Occurrence approach
-	for _, dirConfig := range s.directoryConfigs {
-		// Use OccurrencesWithin to get all missed occurrences for this time period
-		// We look from lastTick to now to find alerts that should have fired
-		occurrences := event.OccurrencesWithin(lastTick, time.Now(), dirConfig.AutomaticAlerts)
-		
-		for _, occ := range occurrences {
-			// Filter to only this specific event occurrence time
-			if !occ.EventTime.Equal(occurrence) {
-				continue
-			}
-			
-			// This alert was missed, create a missed alert request
-			request := AlertRequest{
-				Event:       event,
-				AlertOffset: occ.Offset,
-				Template:    dirConfig.Template,
-				Important:   occ.Important,
-				Late:        true, // All missed alerts are by definition late
-			}
-			requests = append(requests, request)
+	// Use self-contained OccurrencesWithin to get all missed occurrences for this time period
+	// We look from lastTick to now to find alerts that should have fired
+	occurrences := event.OccurrencesWithin(lastTick, time.Now())
+	
+	for _, occ := range occurrences {
+		// Filter to only this specific event occurrence time
+		if !occ.EventTime.Equal(occurrence) {
+			continue
 		}
+		
+		// Find the appropriate template for this event
+		template := s.getTemplateForEvent(event)
+		
+		// This alert was missed, create a missed alert request
+		request := AlertRequest{
+			Event:       event,
+			AlertOffset: occ.Offset,
+			Template:    template,
+			Important:   occ.Important,
+			Late:        true, // All missed alerts are by definition late
+		}
+		requests = append(requests, request)
 	}
 	
 	return requests
@@ -403,20 +425,15 @@ func (s *MinuteBasedScheduler) GetAlertStats() AlertStats {
 	todaysEvents := s.eventStorage.GetEventsForDay(today)
 
 	for _, event := range todaysEvents {
-		for _, dirConfig := range s.directoryConfigs {
-			for _, alertConfig := range dirConfig.AutomaticAlerts {
-				alertOffset, err := alertConfig.Duration()
-				if err != nil {
-					continue
-				}
-
-				alertState := event.GetAlertState(alertOffset)
-				switch alertState {
-				case storage.AlertPending:
-					stats.PendingAlerts++
-				case storage.AlertSent:
-					stats.SentAlerts++
-				}
+		// Use self-contained GetAllAlerts to count alerts
+		allAlerts := event.GetAllAlerts()
+		for _, alert := range allAlerts {
+			alertState := event.GetAlertState(alert.Offset)
+			switch alertState {
+			case storage.AlertPending:
+				stats.PendingAlerts++
+			case storage.AlertSent:
+				stats.SentAlerts++
 			}
 		}
 	}

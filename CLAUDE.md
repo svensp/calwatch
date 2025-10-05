@@ -150,6 +150,12 @@ All packages have comprehensive unit tests. When adding new functionality:
 - Template execution uses `text/template` to avoid XSS
 - Systemd sandboxing limits file system access
 
+## Design Philosophy
+
+### Rejected Feature Proposals
+
+**Web Interface / HTTP API**: Rejected as not fitting CalWatch's design philosophy. CalWatch is designed as a lightweight, focused daemon for calendar notifications - adding a web interface would increase complexity and dependencies without serving the core use case of desktop calendar alerts. Users who need web-based calendar access should use dedicated calendar applications.
+
 ## Documentation Standards
 
 ### Improvement Documentation

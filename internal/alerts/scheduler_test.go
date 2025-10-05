@@ -60,6 +60,13 @@ func TestMinuteBasedScheduler_CheckAlerts(t *testing.T) {
 	now := time.Now()
 	eventTime := now.Add(30 * time.Minute) // Event starts in 30 minutes (not exactly 5 minutes or 1 hour)
 
+	// Create test calendar with alerts  
+	testAlerts := []storage.Alert{
+		{Offset: 5 * time.Minute, Important: false, Source: storage.AlertSourceConfig, Action: storage.AlertActionDisplay},
+		{Offset: 1 * time.Hour, Important: true, Source: storage.AlertSourceConfig, Action: storage.AlertActionDisplay},
+	}
+	calendar := storage.NewCalendar("/test/path", "test.tpl", testAlerts)
+	
 	event := storage.NewCalendarEvent(
 		"test-event",
 		"Test Meeting",
@@ -69,6 +76,8 @@ func TestMinuteBasedScheduler_CheckAlerts(t *testing.T) {
 		eventTime.Add(time.Hour),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]storage.Alert{},
 	)
 
 	// Add event to storage
@@ -93,6 +102,8 @@ func TestMinuteBasedScheduler_CheckAlerts(t *testing.T) {
 		eventTime2.Add(time.Hour),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]storage.Alert{},
 	)
 	eventStorage.UpsertEvent(event2)
 
@@ -167,6 +178,12 @@ func TestAdvancedAlertScheduler_DuplicatePrevention(t *testing.T) {
 	now := time.Now()
 	eventTime := now.Add(5 * time.Minute)
 
+	// Create test calendar with 5-minute alert
+	testAlerts := []storage.Alert{
+		{Offset: 5 * time.Minute, Important: false, Source: storage.AlertSourceConfig, Action: storage.AlertActionDisplay},
+	}
+	calendar := storage.NewCalendar("/test/path", "test.tpl", testAlerts)
+
 	event := storage.NewCalendarEvent(
 		"test-event",
 		"Test Meeting",
@@ -176,6 +193,8 @@ func TestAdvancedAlertScheduler_DuplicatePrevention(t *testing.T) {
 		eventTime.Add(time.Hour),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]storage.Alert{},
 	)
 
 	eventStorage.UpsertEvent(event)
@@ -219,6 +238,13 @@ func TestMinuteBasedScheduler_GetAlertStats(t *testing.T) {
 
 	// Add a test event
 	now := time.Now()
+	
+	// Create test calendar with 5-minute alert
+	testAlerts := []storage.Alert{
+		{Offset: 5 * time.Minute, Important: false, Source: storage.AlertSourceConfig, Action: storage.AlertActionDisplay},
+	}
+	calendar := storage.NewCalendar("/test/path", "test.tpl", testAlerts)
+	
 	event := storage.NewCalendarEvent(
 		"test-event",
 		"Test Meeting",
@@ -228,6 +254,8 @@ func TestMinuteBasedScheduler_GetAlertStats(t *testing.T) {
 		now.Add(2*time.Hour),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]storage.Alert{},
 	)
 	eventStorage.UpsertEvent(event)
 
