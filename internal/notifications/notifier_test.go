@@ -10,6 +10,7 @@ import (
 
 	"calwatch/internal/alerts"
 	"calwatch/internal/config"
+	"calwatch/internal/recurrence"
 	"calwatch/internal/storage"
 )
 
@@ -28,7 +29,7 @@ func TestNotifySendNotifier_CreateTemplateData(t *testing.T) {
 		startTime,
 		endTime,
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 
 	alertOffset := 15 * time.Minute
@@ -229,12 +230,12 @@ func TestNotificationManager_SendNotification(t *testing.T) {
 	event := storage.NewCalendarEvent(
 		"test-uid",
 		"Test Meeting",
-		"",
-		"",
+		"Test Description",
+		"Test Location",
 		time.Now().Add(5*time.Minute),
 		time.Now().Add(65*time.Minute),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 
 	request := alerts.AlertRequest{

@@ -3,6 +3,8 @@ package storage
 import (
 	"testing"
 	"time"
+	
+	"calwatch/internal/recurrence"
 )
 
 func TestMemoryEventStorage_UpsertAndGet(t *testing.T) {
@@ -17,7 +19,7 @@ func TestMemoryEventStorage_UpsertAndGet(t *testing.T) {
 		time.Date(2023, 10, 15, 14, 0, 0, 0, time.UTC),
 		time.Date(2023, 10, 15, 15, 0, 0, 0, time.UTC),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	// Test upsert
@@ -49,7 +51,7 @@ func TestMemoryEventStorage_Delete(t *testing.T) {
 		time.Date(2023, 10, 15, 14, 0, 0, 0, time.UTC),
 		time.Date(2023, 10, 15, 15, 0, 0, 0, time.UTC),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	storage.UpsertEvent(event)
@@ -78,23 +80,23 @@ func TestMemoryEventStorage_GetEventsForDay(t *testing.T) {
 	event1 := NewCalendarEvent(
 		"event-1",
 		"Meeting 1",
-		"",
-		"",
+		"Description 1",
+		"Location 1",
 		time.Date(2023, 10, 15, 14, 0, 0, 0, time.UTC),
 		time.Date(2023, 10, 15, 15, 0, 0, 0, time.UTC),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	event2 := NewCalendarEvent(
 		"event-2",
 		"Meeting 2",
-		"",
-		"",
+		"Description 2",
+		"Location 2",
 		time.Date(2023, 10, 16, 14, 0, 0, 0, time.UTC),
 		time.Date(2023, 10, 16, 15, 0, 0, 0, time.UTC),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	storage.UpsertEvent(event1)
@@ -133,7 +135,7 @@ func TestMemoryEventStorage_GetUpcomingEvents(t *testing.T) {
 		now.Add(30*time.Minute), // 30 minutes from now
 		now.Add(90*time.Minute),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	event2 := NewCalendarEvent(
@@ -144,7 +146,7 @@ func TestMemoryEventStorage_GetUpcomingEvents(t *testing.T) {
 		now.Add(2*time.Hour), // 2 hours from now
 		now.Add(3*time.Hour),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	event3 := NewCalendarEvent(
@@ -155,7 +157,7 @@ func TestMemoryEventStorage_GetUpcomingEvents(t *testing.T) {
 		now.Add(25*time.Hour), // 25 hours from now
 		now.Add(26*time.Hour),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	storage.UpsertEvent(event1)
@@ -190,7 +192,7 @@ func TestCalendarEvent_AlertStates(t *testing.T) {
 		time.Date(2023, 10, 15, 14, 0, 0, 0, time.UTC),
 		time.Date(2023, 10, 15, 15, 0, 0, 0, time.UTC),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	alertOffset := 5 * time.Minute
@@ -223,7 +225,7 @@ func TestCalendarEvent_ShouldAlert(t *testing.T) {
 		eventTime,
 		eventTime.Add(time.Hour),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	
 	alertOffset := 5 * time.Minute

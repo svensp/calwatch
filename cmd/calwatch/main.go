@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -181,21 +183,33 @@ func (cw *CalWatch) performInitialScan() error {
 	for _, dirConfig := range cw.config.Directories {
 		fmt.Fprintf(os.Stderr, "Scanning directory: %s\n", dirConfig.Directory)
 
-		events, err := cw.parser.ParseDirectory(dirConfig.Directory)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to parse directory %s: %v\n", dirConfig.Directory, err)
-			continue
-		}
-
-		// Add events to storage
-		for _, event := range events {
-			if err := cw.eventStorage.UpsertEvent(event); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to store event %s: %v\n", event.GetUID(), err)
+		// Use ParseFile for each individual file to get proper file tracking
+		filepath.Walk(dirConfig.Directory, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // Continue processing other files
 			}
-		}
 
-		fmt.Fprintf(os.Stderr, "Loaded %d events from %s\n", len(events), dirConfig.Directory)
-		totalEvents += len(events)
+			// Skip directories and non-ICS files
+			if info.IsDir() || !strings.HasSuffix(strings.ToLower(info.Name()), ".ics") {
+				return nil
+			}
+
+			events, parseErr := cw.parser.ParseFile(path)
+			if parseErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to parse file %s: %v\n", path, parseErr)
+				return nil
+			}
+
+			// Add events to storage with file tracking
+			for _, event := range events {
+				if err := cw.eventStorage.UpsertEventWithFile(event, path); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to store event %s: %v\n", event.GetUID(), err)
+				}
+			}
+
+			totalEvents += len(events)
+			return nil
+		})
 	}
 
 	// Regenerate daily index for today
@@ -272,23 +286,30 @@ func (cw *CalWatch) handleFileChange(event watcher.FileChangeEvent) {
 			return
 		}
 
-		// Update events in storage
-		for _, event := range events {
-			if err := cw.eventStorage.UpsertEvent(event); err != nil {
-				fmt.Fprintf(os.Stderr, "Error storing event %s: %v\n", event.GetUID(), err)
+		// Update events in storage with file tracking
+		for _, parsedEvent := range events {
+			if err := cw.eventStorage.UpsertEventWithFile(parsedEvent, event.Path); err != nil {
+				fmt.Fprintf(os.Stderr, "Error storing event %s: %v\n", parsedEvent.GetUID(), err)
 			}
 		}
 
 		fmt.Fprintf(os.Stderr, "Updated %d events from %s\n", len(events), event.Path)
 
 	case watcher.FileDeleted:
-		// For deleted files, we can't easily determine which events to remove
-		// In a full implementation, we might track file-to-event mappings
-		fmt.Fprintf(os.Stderr, "File deleted: %s (event cleanup not implemented)\n", event.Path)
+		// Use file tracking to delete the corresponding event
+		if err := cw.eventStorage.DeleteEventByFile(event.Path); err != nil {
+			fmt.Fprintf(os.Stderr, "Error deleting event for file %s: %v\n", event.Path, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "Deleted event(s) for file: %s\n", event.Path)
+		}
 
 	case watcher.FileRenamed:
-		// Handle rename similar to delete + create
-		fmt.Fprintf(os.Stderr, "File renamed: %s\n", event.Path)
+		// Handle rename as delete of old path + create of new path
+		// Note: fsnotify may send multiple events for renames
+		fmt.Fprintf(os.Stderr, "File renamed: %s (treating as deletion)\n", event.Path)
+		if err := cw.eventStorage.DeleteEventByFile(event.Path); err != nil {
+			fmt.Fprintf(os.Stderr, "Error deleting event for renamed file %s: %v\n", event.Path, err)
+		}
 	}
 
 	// Regenerate daily index after changes

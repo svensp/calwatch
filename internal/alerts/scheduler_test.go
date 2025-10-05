@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"calwatch/internal/config"
+	"calwatch/internal/recurrence"
 	"calwatch/internal/storage"
 )
 
@@ -67,7 +68,7 @@ func TestMinuteBasedScheduler_CheckAlerts(t *testing.T) {
 		eventTime,
 		eventTime.Add(time.Hour),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 
 	// Add event to storage
@@ -91,7 +92,7 @@ func TestMinuteBasedScheduler_CheckAlerts(t *testing.T) {
 		eventTime2,
 		eventTime2.Add(time.Hour),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	eventStorage.UpsertEvent(event2)
 
@@ -174,7 +175,7 @@ func TestAdvancedAlertScheduler_DuplicatePrevention(t *testing.T) {
 		eventTime,
 		eventTime.Add(time.Hour),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 
 	eventStorage.UpsertEvent(event)
@@ -221,12 +222,12 @@ func TestMinuteBasedScheduler_GetAlertStats(t *testing.T) {
 	event := storage.NewCalendarEvent(
 		"test-event",
 		"Test Meeting",
-		"",
-		"",
+		"Test Description",
+		"Test Location",
 		now.Add(time.Hour),
 		now.Add(2*time.Hour),
 		time.UTC,
-		"",
+		&recurrence.NoRecurrence{},
 	)
 	eventStorage.UpsertEvent(event)
 

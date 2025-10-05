@@ -8,7 +8,9 @@ import (
 // EventStorage manages in-memory event storage with efficient indexing
 type EventStorage interface {
 	UpsertEvent(event Event) error
+	UpsertEventWithFile(event Event, filename string) error
 	DeleteEvent(uid string) error
+	DeleteEventByFile(filename string) error
 	GetEventsForDay(date time.Time) []Event
 	GetEventsWithinRange(start, end time.Time) []Event
 	GetUpcomingEvents(from time.Time, duration time.Duration) []Event
@@ -25,6 +27,10 @@ type MemoryEventStorage struct {
 	// Daily index for fast lookups - map[YYYY-MM-DD][]Event
 	dailyIndex map[string][]Event
 	
+	// File tracking - bidirectional mapping between filenames and UIDs
+	fileToUID map[string]string  // filename -> UID
+	uidToFile map[string]string  // UID -> filename
+	
 	// Current indexed date
 	currentIndexDate time.Time
 	
@@ -37,17 +43,43 @@ func NewMemoryEventStorage() *MemoryEventStorage {
 	return &MemoryEventStorage{
 		events:     make(map[string]Event),
 		dailyIndex: make(map[string][]Event),
+		fileToUID:  make(map[string]string),
+		uidToFile:  make(map[string]string),
 		mutex:      sync.RWMutex{},
 	}
 }
 
 // UpsertEvent adds or updates an event in storage
 func (s *MemoryEventStorage) UpsertEvent(event Event) error {
+	return s.UpsertEventWithFile(event, "")
+}
+
+// UpsertEventWithFile adds or updates an event in storage with file tracking
+func (s *MemoryEventStorage) UpsertEventWithFile(event Event, filename string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	
+	uid := event.GetUID()
+	
+	// Remove old file mapping if event already exists
+	if oldFilename, exists := s.uidToFile[uid]; exists && oldFilename != "" {
+		delete(s.fileToUID, oldFilename)
+	}
+	
 	// Store event by UID
-	s.events[event.GetUID()] = event
+	s.events[uid] = event
+	
+	// Update file mappings if filename provided
+	if filename != "" {
+		// Remove any existing mapping for this filename (in case file was overwritten)
+		if oldUID, exists := s.fileToUID[filename]; exists {
+			delete(s.uidToFile, oldUID)
+			// Note: we don't delete the old event as it might be from the same file
+		}
+		
+		s.fileToUID[filename] = uid
+		s.uidToFile[uid] = filename
+	}
 	
 	// Regenerate daily index if needed
 	s.regenerateIndexLocked()
@@ -59,6 +91,37 @@ func (s *MemoryEventStorage) UpsertEvent(event Event) error {
 func (s *MemoryEventStorage) DeleteEvent(uid string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	
+	// Remove file mapping if exists
+	if filename, exists := s.uidToFile[uid]; exists {
+		delete(s.fileToUID, filename)
+		delete(s.uidToFile, uid)
+	}
+	
+	// Remove from main storage
+	delete(s.events, uid)
+	
+	// Regenerate daily index
+	s.regenerateIndexLocked()
+	
+	return nil
+}
+
+// DeleteEventByFile removes an event from storage by filename
+func (s *MemoryEventStorage) DeleteEventByFile(filename string) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	
+	// Find the UID for this filename
+	uid, exists := s.fileToUID[filename]
+	if !exists {
+		// File not found, nothing to delete
+		return nil
+	}
+	
+	// Remove file mappings
+	delete(s.fileToUID, filename)
+	delete(s.uidToFile, uid)
 	
 	// Remove from main storage
 	delete(s.events, uid)
@@ -190,6 +253,8 @@ func (s *MemoryEventStorage) Clear() error {
 	
 	s.events = make(map[string]Event)
 	s.dailyIndex = make(map[string][]Event)
+	s.fileToUID = make(map[string]string)
+	s.uidToFile = make(map[string]string)
 	s.currentIndexDate = time.Time{}
 	
 	return nil

@@ -180,3 +180,14 @@ All improvements MUST update the version number in `default.nix` following seman
 - **Patch version** (X.Y.Z): Bug fixes and internal improvements that don't change external behavior
 
 **Pre-1.0.0 Exception**: Since CalWatch is pre-1.0.0, breaking changes should increment the minor version instead of major version (0.X.0).
+
+### Version Release Process
+
+When creating a new version, follow these steps in order:
+
+1. **Update version in `default.nix`** - Change the version number according to semver rules
+2. **Commit the changes** - Include all code changes and the version bump in the commit
+3. **Create and push git tag** - Tag the commit with the version number (e.g., `v0.2.1` or `0.2.1`)
+4. **Push both commit and tag** - Ensure both the commit and tag are pushed to the remote repository
+
+This ensures proper version tracking and allows users to reference specific versions via git tags.

@@ -3,6 +3,8 @@ package storage
 import (
 	"sync"
 	"time"
+	
+	"calwatch/internal/recurrence"
 )
 
 // AlertState represents the state of an alert for an event
@@ -40,7 +42,7 @@ type CalendarEvent struct {
 	StartTime   time.Time
 	EndTime     time.Time
 	Timezone    *time.Location
-	RRule       string // Recurrence rule
+	Recurrence  recurrence.Recurrence // Recurrence rule implementation
 	ExDates     []time.Time // Exception dates
 	
 	// Alert state tracking per offset
@@ -50,7 +52,7 @@ type CalendarEvent struct {
 
 // NewCalendarEvent creates a new calendar event
 func NewCalendarEvent(uid, summary, description, location string, 
-	startTime, endTime time.Time, timezone *time.Location, rrule string) *CalendarEvent {
+	startTime, endTime time.Time, timezone *time.Location, rec recurrence.Recurrence) *CalendarEvent {
 	
 	return &CalendarEvent{
 		UID:         uid,
@@ -60,10 +62,22 @@ func NewCalendarEvent(uid, summary, description, location string,
 		StartTime:   startTime,
 		EndTime:     endTime,
 		Timezone:    timezone,
-		RRule:       rrule,
+		Recurrence:  rec,
 		ExDates:     make([]time.Time, 0),
 		alertStates: make(map[time.Duration]AlertState),
 	}
+}
+
+// NewCalendarEventFromRRule creates a new calendar event with RRULE string
+func NewCalendarEventFromRRule(uid, summary, description, location string, 
+	startTime, endTime time.Time, timezone *time.Location, rrule string) (*CalendarEvent, error) {
+	
+	rec, err := recurrence.ParseRRule(rrule)
+	if err != nil {
+		return nil, err
+	}
+	
+	return NewCalendarEvent(uid, summary, description, location, startTime, endTime, timezone, rec), nil
 }
 
 // GetUID returns the unique identifier of the event
@@ -106,53 +120,55 @@ func (e *CalendarEvent) GetTimezone() *time.Location {
 
 // OccursOn checks if the event occurs on a specific date
 func (e *CalendarEvent) OccursOn(date time.Time) bool {
-	// For now, implement simple logic - will be enhanced with RRULE parsing
-	eventDate := e.StartTime.In(e.GetTimezone()).Truncate(24 * time.Hour)
-	checkDate := date.In(e.GetTimezone()).Truncate(24 * time.Hour)
-	
-	// Check if it's the original occurrence
-	if eventDate.Equal(checkDate) {
-		return !e.isExceptionDate(e.StartTime)
+	if e.Recurrence == nil {
+		// No recurrence, check only the base occurrence
+		eventDate := e.StartTime.In(e.GetTimezone()).Truncate(24 * time.Hour)
+		checkDate := date.In(e.GetTimezone()).Truncate(24 * time.Hour)
+		return eventDate.Equal(checkDate) && !e.isExceptionDate(e.StartTime)
 	}
 	
-	// TODO: Implement RRULE expansion logic
-	// For now, only handle single occurrence events
-	return false
+	// Use recurrence logic to check if it occurs on this date
+	return e.Recurrence.OccursOn(date, e.StartTime) && !e.isExceptionDate(e.StartTime)
 }
 
 // OccurredWithin returns all occurrences of the event within the given time range
 func (e *CalendarEvent) OccurredWithin(start, end time.Time) []time.Time {
-	var occurrences []time.Time
-	
-	// Ensure start and end are in the event's timezone for proper comparison
-	eventTz := e.GetTimezone()
-	startInTz := start.In(eventTz)
-	endInTz := end.In(eventTz)
-	eventStartInTz := e.StartTime.In(eventTz)
-	
-	// Check if the original occurrence falls within the range (inclusive bounds)
-	if (eventStartInTz.After(startInTz) || eventStartInTz.Equal(startInTz)) &&
-		(eventStartInTz.Before(endInTz) || eventStartInTz.Equal(endInTz)) &&
-		!e.isExceptionDate(e.StartTime) {
-		occurrences = append(occurrences, e.StartTime)
+	if e.Recurrence == nil {
+		// No recurrence, check only the base occurrence
+		var occurrences []time.Time
+		
+		// Ensure start and end are in the event's timezone for proper comparison
+		eventTz := e.GetTimezone()
+		startInTz := start.In(eventTz)
+		endInTz := end.In(eventTz)
+		eventStartInTz := e.StartTime.In(eventTz)
+		
+		// Check if the original occurrence falls within the range (inclusive bounds)
+		if (eventStartInTz.After(startInTz) || eventStartInTz.Equal(startInTz)) &&
+			(eventStartInTz.Before(endInTz) || eventStartInTz.Equal(endInTz)) &&
+			!e.isExceptionDate(e.StartTime) {
+			occurrences = append(occurrences, e.StartTime)
+		}
+		
+		return occurrences
 	}
 	
-	// TODO: Implement RRULE expansion logic for recurring events
-	// This would iterate through the recurrence rule and find all occurrences
-	// within the time range, respecting EXDATE exceptions
-	
-	return occurrences
+	// Use recurrence logic to find all occurrences within the range
+	return e.Recurrence.OccurredWithin(start, end, e.StartTime, e.ExDates)
 }
 
 // NextOccurrence returns the next occurrence of the event after the given time
 func (e *CalendarEvent) NextOccurrence(after time.Time) *time.Time {
-	// Simple implementation - only consider the original start time
-	if e.StartTime.After(after) && !e.isExceptionDate(e.StartTime) {
-		return &e.StartTime
+	if e.Recurrence == nil {
+		// No recurrence, check only the base occurrence
+		if e.StartTime.After(after) && !e.isExceptionDate(e.StartTime) {
+			return &e.StartTime
+		}
+		return nil
 	}
 	
-	// TODO: Implement RRULE expansion to find next recurrence
-	return nil
+	// Use recurrence logic to find the next occurrence
+	return e.Recurrence.NextOccurrence(after, e.StartTime, e.ExDates)
 }
 
 // ShouldAlert determines if an alert should be sent for this event within the given time range

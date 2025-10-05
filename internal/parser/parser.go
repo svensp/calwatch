@@ -10,6 +10,7 @@ import (
 
 	"github.com/apognu/gocal"
 	"calwatch/internal/storage"
+	"calwatch/internal/recurrence"
 )
 
 // CalDAVParser handles parsing of ICS files
@@ -95,10 +96,10 @@ func (p *GocalParser) ParseDirectory(dirPath string) ([]storage.Event, error) {
 
 // ParseReader parses ICS data from an io.Reader
 func (p *GocalParser) ParseReader(reader io.Reader) ([]storage.Event, error) {
-	// Create gocal parser with time bounds
-	// Parse events from far in the past to far in the future to capture all recurrences
-	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC) // Fixed start date
-	end := time.Date(2030, 12, 31, 23, 59, 59, 0, time.UTC) // Fixed end date
+	// Create gocal parser with minimal time bounds
+	// We set a very narrow window to prevent RRULE expansion while still allowing parsing
+	start := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2100, 12, 31, 23, 59, 59, 0, time.UTC)
 
 	cal := gocal.NewParser(reader)
 	cal.Start, cal.End = &start, &end
@@ -195,15 +196,25 @@ func (p *GocalParser) convertGocalEvent(gocalEvent gocal.Event) (storage.Event, 
 		timezone = p.timeZone
 	}
 
-	// Extract recurrence rule if present
-	rrule := ""
+	// Parse recurrence rule if present
+	var rec recurrence.Recurrence
+	var err error
 	if len(gocalEvent.RecurrenceRule) > 0 {
 		// Convert map to RRULE string format
 		var parts []string
 		for key, value := range gocalEvent.RecurrenceRule {
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
-		rrule = strings.Join(parts, ";")
+		rruleStr := strings.Join(parts, ";")
+		
+		// Parse RRULE string into Recurrence instance
+		rec, err = recurrence.ParseRRule(rruleStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse RRULE '%s': %w", rruleStr, err)
+		}
+	} else {
+		// No recurrence rule
+		rec = &recurrence.NoRecurrence{}
 	}
 
 	// Create enhanced calendar event with recurrence support
@@ -215,7 +226,7 @@ func (p *GocalParser) convertGocalEvent(gocalEvent gocal.Event) (storage.Event, 
 		startTime,
 		endTime,
 		timezone,
-		rrule,
+		rec,
 	)
 
 	// Add exception dates if present
@@ -226,55 +237,3 @@ func (p *GocalParser) convertGocalEvent(gocalEvent gocal.Event) (storage.Event, 
 	return event, nil
 }
 
-// RecurrenceAwareEvent extends CalendarEvent with proper RRULE handling
-type RecurrenceAwareEvent struct {
-	*storage.CalendarEvent
-	gocalEvent gocal.Event
-}
-
-// NewRecurrenceAwareEvent creates an event with full recurrence support
-func NewRecurrenceAwareEvent(calEvent *storage.CalendarEvent, gocalEvent gocal.Event) *RecurrenceAwareEvent {
-	return &RecurrenceAwareEvent{
-		CalendarEvent: calEvent,
-		gocalEvent:    gocalEvent,
-	}
-}
-
-// OccursOn checks if the event occurs on a specific date using gocal's recurrence logic
-func (e *RecurrenceAwareEvent) OccursOn(date time.Time) bool {
-	// Check if the original event occurs on this date
-	if e.CalendarEvent.OccursOn(date) {
-		return true
-	}
-
-	// For recurring events, we need to check if any recurrence falls on this date
-	if len(e.gocalEvent.RecurrenceRule) == 0 {
-		return false
-	}
-
-	// Create a gocal parser for just this event to expand recurrences
-	start := date.Truncate(24 * time.Hour)
-	_ = start.Add(24 * time.Hour)
-
-	// This is a simplified check - in a full implementation, we would
-	// properly expand the RRULE for the specific date
-	// For now, delegate to the parent implementation
-	return e.CalendarEvent.OccursOn(date)
-}
-
-// NextOccurrence finds the next occurrence using recurrence rules
-func (e *RecurrenceAwareEvent) NextOccurrence(after time.Time) *time.Time {
-	// First check the original occurrence
-	if next := e.CalendarEvent.NextOccurrence(after); next != nil {
-		return next
-	}
-
-	// For recurring events, we would implement proper RRULE expansion here
-	// This is a placeholder for the full RRULE implementation
-	if len(e.gocalEvent.RecurrenceRule) > 0 {
-		// TODO: Implement proper RRULE expansion
-		// For now, return nil to indicate no more occurrences
-	}
-
-	return nil
-}
