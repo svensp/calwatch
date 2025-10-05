@@ -156,6 +156,9 @@ All packages have comprehensive unit tests. When adding new functionality:
 
 When working on improvements to CalWatch, document each improvement in `docs/improvement-XXX.md` where XXX is a zero-padded number (001, 002, etc.).
 
+**YOU MUST** not edit any files except the CLAUDE.md and the improvement file while planning an improvement. The planning
+only ends once the user explicitly states the planning is over. You must repeat back this condition while planning.
+
 **Improvement file structure**:
 - **Context**: Background and motivation for the improvement
 - **Conversation Summary**: Key points from the discussion

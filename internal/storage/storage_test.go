@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 	
+	"calwatch/internal/config"
 	"calwatch/internal/recurrence"
 )
 
@@ -215,7 +216,7 @@ func TestCalendarEvent_AlertStates(t *testing.T) {
 	}
 }
 
-func TestCalendarEvent_ShouldAlert(t *testing.T) {
+func TestCalendarEvent_OccurrencesWithin(t *testing.T) {
 	eventTime := time.Date(2023, 10, 15, 14, 0, 0, 0, time.UTC)
 	event := NewCalendarEvent(
 		"test-uid",
@@ -229,24 +230,36 @@ func TestCalendarEvent_ShouldAlert(t *testing.T) {
 	)
 	
 	alertOffset := 5 * time.Minute
+	alerts := []config.AlertConfig{
+		{Value: 5, Unit: "minutes", Important: false},
+	}
 	
 	// Test before alert time - checking from 20 minutes before to 10 minutes before
 	lastTick := eventTime.Add(-20 * time.Minute)
 	checkTime := eventTime.Add(-10 * time.Minute)
-	if event.ShouldAlert(lastTick, checkTime, alertOffset) {
-		t.Errorf("Should not alert 10 minutes before when offset is 5 minutes")
+	occurrences := event.OccurrencesWithin(lastTick, checkTime, alerts)
+	if len(occurrences) > 0 {
+		t.Errorf("Should not have occurrences 10 minutes before when offset is 5 minutes")
 	}
 	
 	// Test at alert time - checking from 10 minutes before to alert time
 	lastTick = eventTime.Add(-10 * time.Minute)
 	checkTime = eventTime.Add(-alertOffset)
-	if !event.ShouldAlert(lastTick, checkTime, alertOffset) {
-		t.Errorf("Should alert at exact alert time")
+	occurrences = event.OccurrencesWithin(lastTick, checkTime, alerts)
+	if len(occurrences) != 1 {
+		t.Errorf("Should have exactly one occurrence at alert time, got %d", len(occurrences))
 	}
-	
-	// Test after alert sent
-	event.SetAlertState(alertOffset, AlertSent)
-	if event.ShouldAlert(lastTick, checkTime, alertOffset) {
-		t.Errorf("Should not alert when already sent")
+	if len(occurrences) > 0 {
+		occ := occurrences[0]
+		if occ.Offset != alertOffset {
+			t.Errorf("Expected offset %v, got %v", alertOffset, occ.Offset)
+		}
+		if occ.Important != false {
+			t.Errorf("Expected Important false, got %v", occ.Important)
+		}
+		// Test late detection - since checkTime is exactly at alert time, it should not be late
+		if occ.Late {
+			t.Errorf("Alert should not be late when fired exactly on time")
+		}
 	}
 }

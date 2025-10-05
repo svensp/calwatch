@@ -27,8 +27,9 @@ type DirectoryConfig struct {
 
 // AlertConfig represents an alert timing configuration
 type AlertConfig struct {
-	Value int    `yaml:"value"`
-	Unit  string `yaml:"unit"`
+	Value     int  `yaml:"value"`
+	Unit      string `yaml:"unit"`
+	Important bool `yaml:"important"`
 }
 
 // DurationConfig represents a user-friendly duration configuration
@@ -322,7 +323,7 @@ func DefaultConfig() *Config {
 				Directory: "~/.calendars",
 				Template:  "default.tpl",
 				AutomaticAlerts: []AlertConfig{
-					{Value: 5, Unit: "minutes"},
+					{Value: 5, Unit: "minutes", Important: false},
 				},
 			},
 		},

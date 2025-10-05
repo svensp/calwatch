@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 	
+	"calwatch/internal/config"
 	"calwatch/internal/recurrence"
 )
 
@@ -16,6 +17,16 @@ const (
 	AlertSnoozed
 )
 
+// Occurrence represents a specific alert occurrence for an event
+type Occurrence struct {
+	EventTime   time.Time     // When the event actually occurs
+	AlertTime   time.Time     // When this alert should fire
+	Offset      time.Duration // Alert offset (5m, 30m, etc.)
+	Important   bool          // Whether this alert is marked important
+	Late        bool          // Whether this alert is firing late (past intended time)
+	EventData   Event         // Reference to the full event
+}
+
 // Event represents a calendar event with alert tracking
 type Event interface {
 	GetUID() string
@@ -27,8 +38,8 @@ type Event interface {
 	GetTimezone() *time.Location
 	OccursOn(date time.Time) bool
 	OccurredWithin(start, end time.Time) []time.Time
+	OccurrencesWithin(start, end time.Time, alerts []config.AlertConfig) []Occurrence
 	NextOccurrence(after time.Time) *time.Time
-	ShouldAlert(lastTick, now time.Time, alertOffset time.Duration) bool
 	GetAlertState(alertOffset time.Duration) AlertState
 	SetAlertState(alertOffset time.Duration, state AlertState)
 }
@@ -171,38 +182,61 @@ func (e *CalendarEvent) NextOccurrence(after time.Time) *time.Time {
 	return e.Recurrence.NextOccurrence(after, e.StartTime, e.ExDates)
 }
 
-// ShouldAlert determines if an alert should be sent for this event within the given time range
-func (e *CalendarEvent) ShouldAlert(lastTick, now time.Time, alertOffset time.Duration) bool {
-	e.mutex.RLock()
-	defer e.mutex.RUnlock()
+// OccurrencesWithin returns all alert occurrences of the event within the given time range
+func (e *CalendarEvent) OccurrencesWithin(start, end time.Time, alerts []config.AlertConfig) []Occurrence {
+	var occurrences []Occurrence
 	
-	// Check if alert was already sent
-	if state, exists := e.alertStates[alertOffset]; exists && state == AlertSent {
-		return false
-	}
-	
-	// We need to check a broader range to find events whose alert times fall within [lastTick, now]
-	// If alert offset is X, we need to look for events that occur up to X time after 'now'
-	searchStart := lastTick
-	searchEnd := now.Add(alertOffset)
-	
-	// Find all occurrences within the expanded search range
-	occurrences := e.OccurredWithin(searchStart, searchEnd)
-	if len(occurrences) == 0 {
-		return false
-	}
-	
-	// Check if any occurrence has its alert time within our target range [lastTick, now]
-	for _, occurrence := range occurrences {
-		alertTime := occurrence.Add(-alertOffset)
-		// Alert should fire if: lastTick < alertTime <= now
-		if alertTime.After(lastTick) && (now.After(alertTime) || now.Equal(alertTime)) {
-			return true
+	// Get all event occurrences within an extended time range to catch alerts
+	// We need to look beyond 'end' to find events whose alerts fall within [start, end]
+	maxOffset := time.Duration(0)
+	for _, alert := range alerts {
+		if alertDuration, err := alert.Duration(); err == nil {
+			if alertDuration > maxOffset {
+				maxOffset = alertDuration
+			}
 		}
 	}
 	
-	return false
+	// Extend search range to find events whose alerts might fall in our target range
+	searchStart := start
+	searchEnd := end.Add(maxOffset)
+	
+	// Get all event occurrences in the extended range
+	eventOccurrences := e.OccurredWithin(searchStart, searchEnd)
+	
+	// For each event occurrence, generate alert occurrences
+	for _, eventTime := range eventOccurrences {
+		for _, alertConfig := range alerts {
+			alertOffset, err := alertConfig.Duration()
+			if err != nil {
+				continue // Skip invalid alert configs
+			}
+			
+			alertTime := eventTime.Add(-alertOffset)
+			
+			// Check if this alert time falls within our target range [start, end]
+			if alertTime.After(start) && (alertTime.Before(end) || alertTime.Equal(end)) {
+				// Determine if this alert is late (should have fired more than 1 minute before 'end'/now)
+				// Since we check every minute, anything more than ~1 minute overdue is "late"
+				minuteThreshold := time.Minute
+				isLate := alertTime.Before(end.Add(-minuteThreshold))
+				
+				occurrence := Occurrence{
+					EventTime: eventTime,
+					AlertTime: alertTime,
+					Offset:    alertOffset,
+					Important: alertConfig.Important,
+					Late:      isLate,
+					EventData: e,
+				}
+				occurrences = append(occurrences, occurrence)
+			}
+		}
+	}
+	
+	return occurrences
 }
+
 
 // GetAlertState returns the current alert state for a specific offset
 func (e *CalendarEvent) GetAlertState(alertOffset time.Duration) AlertState {

@@ -18,6 +18,15 @@ import (
 	"calwatch/internal/storage"
 )
 
+// UrgencyLevel represents the urgency level for notifications
+type UrgencyLevel int
+
+const (
+	UrgencyLow      UrgencyLevel = iota // 0 - D-Bus Low
+	UrgencyNormal                       // 1 - D-Bus Normal (default)
+	UrgencyCritical                     // 2 - D-Bus Critical
+)
+
 // TemplateData represents the data available to notification templates
 type TemplateData struct {
 	Summary     string
@@ -41,6 +50,7 @@ type NotificationContext struct {
 type NotificationRequest struct {
 	AlertRequest alerts.AlertRequest
 	Context      NotificationContext
+	Urgency      UrgencyLevel
 }
 
 // Notifier handles sending notifications
@@ -89,9 +99,16 @@ func (n *NotifySendNotifier) SetConfig(config config.NotificationConfig) {
 
 // SendNotification sends a notification for an alert request (using normal duration)
 func (n *NotifySendNotifier) SendNotification(request alerts.AlertRequest) error {
+	// Map AlertRequest flags to NotificationRequest
+	urgency := UrgencyNormal
+	if request.Important {
+		urgency = UrgencyCritical
+	}
+	
 	return n.SendNotificationWithContext(NotificationRequest{
 		AlertRequest: request,
-		Context:      NotificationContext{IsLate: false},
+		Context:      NotificationContext{IsLate: request.Late},
+		Urgency:      urgency,
 	})
 }
 
@@ -121,8 +138,8 @@ func (n *NotifySendNotifier) SendNotificationWithContext(request NotificationReq
 		}
 	}
 
-	// Send the notification with appropriate duration
-	return n.sendDesktopNotificationWithContext(data.Summary, buf.String(), request.Context)
+	// Send the notification with appropriate duration and urgency
+	return n.sendDesktopNotificationWithUrgency(data.Summary, buf.String(), request.Context, request.Urgency)
 }
 
 // createTemplateData creates template data from an event
@@ -245,6 +262,11 @@ func (n *NotifySendNotifier) sendDesktopNotification(title, message string) erro
 
 // sendDesktopNotificationWithContext sends a notification with context-appropriate duration
 func (n *NotifySendNotifier) sendDesktopNotificationWithContext(title, message string, context NotificationContext) error {
+	return n.sendDesktopNotificationWithUrgency(title, message, context, UrgencyNormal)
+}
+
+// sendDesktopNotificationWithUrgency sends a notification with full context including urgency
+func (n *NotifySendNotifier) sendDesktopNotificationWithUrgency(title, message string, context NotificationContext, urgency UrgencyLevel) error {
 	// Choose duration based on context
 	var durationConfig config.DurationConfig
 	if context.IsLate {
@@ -260,10 +282,18 @@ func (n *NotifySendNotifier) sendDesktopNotificationWithContext(title, message s
 		durationMs = 5000
 	}
 	
+	// Map urgency level to notify-send urgency flag
+	urgencyFlag := map[UrgencyLevel]string{
+		UrgencyLow:      "--urgency=low",
+		UrgencyNormal:   "--urgency=normal",
+		UrgencyCritical: "--urgency=critical",
+	}[urgency]
+	
 	// Prepare notify-send command
 	args := []string{
 		"notify-send",
 		"--app-name=calwatch",
+		urgencyFlag,
 		fmt.Sprintf("--expire-time=%d", durationMs),
 	}
 
@@ -374,9 +404,16 @@ func (d *DBusNotifier) SetConfig(config config.NotificationConfig) {
 
 // SendNotification sends a notification for an alert request (using normal duration)
 func (d *DBusNotifier) SendNotification(request alerts.AlertRequest) error {
+	// Map AlertRequest flags to NotificationRequest
+	urgency := UrgencyNormal
+	if request.Important {
+		urgency = UrgencyCritical
+	}
+	
 	return d.SendNotificationWithContext(NotificationRequest{
 		AlertRequest: request,
-		Context:      NotificationContext{IsLate: false},
+		Context:      NotificationContext{IsLate: request.Late},
+		Urgency:      urgency,
 	})
 }
 
@@ -406,8 +443,8 @@ func (d *DBusNotifier) SendNotificationWithContext(request NotificationRequest) 
 		}
 	}
 
-	// Send the notification with appropriate duration
-	return d.sendDesktopNotificationWithContext(data.Summary, buf.String(), request.Context)
+	// Send the notification with appropriate duration and urgency
+	return d.sendDesktopNotificationWithUrgency(data.Summary, buf.String(), request.Context, request.Urgency)
 }
 
 // createTemplateData creates template data from an event
@@ -530,6 +567,11 @@ func (d *DBusNotifier) sendDesktopNotification(title, message string) error {
 
 // sendDesktopNotificationWithContext sends a notification with context-appropriate duration
 func (d *DBusNotifier) sendDesktopNotificationWithContext(title, message string, context NotificationContext) error {
+	return d.sendDesktopNotificationWithUrgency(title, message, context, UrgencyNormal)
+}
+
+// sendDesktopNotificationWithUrgency sends a notification with full context including urgency
+func (d *DBusNotifier) sendDesktopNotificationWithUrgency(title, message string, context NotificationContext, urgency UrgencyLevel) error {
 	// Choose duration based on context
 	var durationConfig config.DurationConfig
 	if context.IsLate {
@@ -545,6 +587,17 @@ func (d *DBusNotifier) sendDesktopNotificationWithContext(title, message string,
 		durationMs = 5000
 	}
 	
+	// Map urgency level to D-Bus urgency hint
+	hints := map[string]dbus.Variant{}
+	switch urgency {
+	case UrgencyLow:
+		hints["urgency"] = dbus.MakeVariant(byte(0))
+	case UrgencyNormal:
+		hints["urgency"] = dbus.MakeVariant(byte(1))
+	case UrgencyCritical:
+		hints["urgency"] = dbus.MakeVariant(byte(2))
+	}
+	
 	notification := notify.Notification{
 		AppName:       "calwatch",
 		ReplacesID:    0,
@@ -552,7 +605,7 @@ func (d *DBusNotifier) sendDesktopNotificationWithContext(title, message string,
 		Summary:       title,
 		Body:          message,
 		Actions:       []notify.Action{},
-		Hints:         map[string]dbus.Variant{},
+		Hints:         hints,
 		ExpireTimeout: time.Duration(durationMs) * time.Millisecond,
 	}
 

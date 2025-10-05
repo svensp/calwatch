@@ -9,17 +9,24 @@ directories:
     automatic_alerts:
       - value: 15
         unit: minutes
+        important: false    # Normal notification (default)
       - value: 1
         unit: hours
+        important: false
 
-  # Work calendar  
+  # Work calendar with important alerts for critical meetings
   - directory: ~/.calendars/work
     template: minimal.tpl
     automatic_alerts:
+      - value: 15
+        unit: minutes
+        important: false    # Gentle early warning
       - value: 5
         unit: minutes
+        important: true     # Important final warning
       - value: 30
         unit: minutes
+        important: false
 
   # Family calendar
   - directory: ~/.calendars/family
@@ -27,11 +34,28 @@ directories:
     automatic_alerts:
       - value: 10
         unit: minutes
+        important: false
 
 # Notification settings
 notification:
-  backend: dbus           # Options: dbus (default), notify-send
-  duration: 5000          # Notification display duration in milliseconds
+  backend: notify-send    # Options: notify-send (default), dbus
+  duration:
+    type: timed           # "timed" or "until_dismissed"
+    value: 5              # Required for "timed" type
+    unit: seconds         # "milliseconds", "seconds" (default), "minutes"
+  duration_when_late:
+    type: until_dismissed # Late notifications require manual dismissal
+
+# Wake-up and missed event handling
+wakeup_handling:
+  enable: true
+  missed_event_policy: all      # Options: "all", "summary", "priority_only", "skip"
+  max_missed_days: 7            # Don't process events older than this
+  summary_threshold: 5          # Show summary if more than N missed events
+  max_catchup_time:
+    type: timed
+    value: 30
+    unit: seconds
 
 # Logging configuration
 logging:
