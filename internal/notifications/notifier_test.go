@@ -21,6 +21,9 @@ func TestNotifySendNotifier_CreateTemplateData(t *testing.T) {
 	startTime := time.Date(2023, 10, 15, 14, 30, 0, 0, time.UTC)
 	endTime := startTime.Add(time.Hour)
 
+	// Create test calendar
+	calendar := storage.NewCalendar("/test/path", "test.tpl", []storage.Alert{})
+
 	event := storage.NewCalendarEvent(
 		"test-uid",
 		"Team Meeting",
@@ -30,6 +33,8 @@ func TestNotifySendNotifier_CreateTemplateData(t *testing.T) {
 		endTime,
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]storage.Alert{},
 	)
 
 	alertOffset := 15 * time.Minute
@@ -227,6 +232,9 @@ func TestNotificationManager_SendNotification(t *testing.T) {
 	manager := NewNotificationManager(config)
 
 	// Create test alert request
+	// Create test calendar
+	calendar := storage.NewCalendar("/test/path", "test.tpl", []storage.Alert{})
+	
 	event := storage.NewCalendarEvent(
 		"test-uid",
 		"Test Meeting",
@@ -236,6 +244,8 @@ func TestNotificationManager_SendNotification(t *testing.T) {
 		time.Now().Add(65*time.Minute),
 		time.UTC,
 		&recurrence.NoRecurrence{},
+		calendar,
+		[]storage.Alert{},
 	)
 
 	request := alerts.AlertRequest{

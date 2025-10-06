@@ -184,6 +184,9 @@ func (p *GocalParser) ValidateICS(data []byte) error {
 
 // convertGocalEvent converts a gocal.Event to our storage.Event interface
 func (p *GocalParser) convertGocalEvent(gocalEvent gocal.Event, icsData string) (storage.Event, error) {
+	// TODO: This needs to be updated to accept a Calendar parameter when Calendar integration is complete
+	// For now, create a default calendar to make the code compile
+	defaultCalendar := storage.NewCalendar("", "", []storage.Alert{})
 	// Extract basic event information
 	uid := gocalEvent.Uid
 	if uid == "" {
@@ -225,6 +228,14 @@ func (p *GocalParser) convertGocalEvent(gocalEvent gocal.Event, icsData string) 
 		rec = &recurrence.NoRecurrence{}
 	}
 
+	// Parse VALARM components for this event
+	valarmAlerts, err := p.parseVALARMs(icsData, gocalEvent.Uid)
+	if err != nil {
+		// Log warning but don't fail the entire event
+		fmt.Fprintf(os.Stderr, "Warning: Failed to parse VALARMs for event %s: %v\n", gocalEvent.Uid, err)
+		valarmAlerts = []storage.Alert{} // Use empty slice on error
+	}
+
 	// Create enhanced calendar event with recurrence support
 	event := storage.NewCalendarEvent(
 		uid,
@@ -235,22 +246,14 @@ func (p *GocalParser) convertGocalEvent(gocalEvent gocal.Event, icsData string) 
 		endTime,
 		timezone,
 		rec,
+		defaultCalendar,
+		valarmAlerts,
 	)
 
 	// Add exception dates if present
 	for _, exDate := range gocalEvent.ExcludeDates {
 		event.AddExceptionDate(exDate)
 	}
-
-	// Parse VALARM components for this event
-	valarmAlerts, err := p.parseVALARMs(icsData, gocalEvent.Uid)
-	if err != nil {
-		// Log warning but don't fail the entire event
-		fmt.Fprintf(os.Stderr, "Warning: Failed to parse VALARMs for event %s: %v\n", gocalEvent.Uid, err)
-	}
-
-	// TODO: Add VALARM alerts to the event once CalendarEvent supports IntrinsicAlerts
-	_ = valarmAlerts // Suppress unused variable warning for now
 
 	return event, nil
 }
